@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FinTrack — Personal Finance Tracker</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+  <!-- ===================== SIDEBAR ===================== -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">
+        <span class="logo-icon">💰</span>
+        <span class="logo-text">FinTrack</span>
+      </div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <ul>
+        <li>
+          <a href="#" class="nav-item active" data-section="dashboard">
+            <span class="nav-icon">📊</span>
+            <span class="nav-label">Dashboard</span>
+          </a>
+        </li>
+        <li>
+          <a href="#" class="nav-item" data-section="expenses">
+            <span class="nav-icon">💸</span>
+            <span class="nav-label">Expenses</span>
+          </a>
+        </li>
+        <li>
+          <a href="#" class="nav-item" data-section="investments">
+            <span class="nav-icon">📈</span>
+            <span class="nav-label">Investments</span>
+          </a>
+        </li>
+        <li>
+          <a href="#" class="nav-item" data-section="savings">
+            <span class="nav-icon">🏦</span>
+            <span class="nav-label">Savings</span>
+          </a>
+        </li>
+      </ul>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="user-profile">
+        <div class="avatar">SV</div>
+        <div class="user-info">
+          <span class="user-name">Swaroop V.</span>
+          <span class="user-role">Personal Account</span>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ===================== MAIN CONTENT ===================== -->
+  <main class="main-content" id="mainContent">
+
+    <!-- Top Header -->
+    <header class="top-header">
+      <div class="header-left">
+        <h1 class="page-title" id="pageTitle">Dashboard</h1>
+        <p class="page-subtitle" id="pageSubtitle">Overview of your finances</p>
+      </div>
+      <div class="header-right">
+        <div class="month-selector">
+          <button class="btn-icon" id="prevMonth">&#8249;</button>
+          <span class="current-month" id="currentMonth">April 2026</span>
+          <button class="btn-icon" id="nextMonth">&#8250;</button>
+        </div>
+        <button class="btn-primary" id="addEntryBtn">+ Add Entry</button>
+      </div>
+    </header>
+
+    <!-- =================== DASHBOARD SECTION =================== -->
+    <section class="content-section active" id="section-dashboard">
+
+      <!-- Summary Cards -->
+      <div class="cards-grid">
+        <div class="summary-card wealth">
+          <div class="card-icon">💼</div>
+          <div class="card-content">
+            <span class="card-label">Total Wealth</span>
+            <span class="card-value">$124,500</span>
+            <span class="card-change positive">+2.4% this month</span>
+          </div>
+        </div>
+        <div class="summary-card income">
+          <div class="card-icon">💵</div>
+          <div class="card-content">
+            <span class="card-label">Monthly Income</span>
+            <span class="card-value">$6,500</span>
+            <span class="card-change positive">+$500 vs last month</span>
+          </div>
+        </div>
+        <div class="summary-card expenses">
+          <div class="card-icon">💸</div>
+          <div class="card-content">
+            <span class="card-label">Monthly Expenses</span>
+            <span class="card-value">$3,240</span>
+            <span class="card-change negative">+8.2% vs last month</span>
+          </div>
+        </div>
+        <div class="summary-card savings">
+          <div class="card-icon">🏦</div>
+          <div class="card-content">
+            <span class="card-label">Net Savings</span>
+            <span class="card-value">$3,260</span>
+            <span class="card-change positive">50.2% savings rate</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Charts Row -->
+      <div class="charts-row">
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>Expense Breakdown</h3>
+            <span class="chart-subtitle">April 2026</span>
+          </div>
+          <div class="chart-container">
+            <canvas id="expenseChart"></canvas>
+          </div>
+          <div class="chart-legend" id="expenseLegend"></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>Savings vs Expenses Trend</h3>
+            <span class="chart-subtitle">Last 6 Months</span>
+          </div>
+          <div class="chart-container">
+            <canvas id="savingsChart"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Recent Transactions & Investment Snapshot -->
+      <div class="bottom-row">
+        <div class="table-card">
+          <div class="table-header">
+            <h3>Recent Transactions</h3>
+            <a href="#" class="view-all" data-section="expenses">View All</a>
+          </div>
+          <div id="recentTransactions"></div>
+        </div>
+        <div class="table-card">
+          <div class="table-header">
+            <h3>Investment Snapshot</h3>
+            <a href="#" class="view-all" data-section="investments">View All</a>
+          </div>
+          <div id="investmentSnapshot"></div>
+        </div>
+      </div>
+
+    </section>
+
+
+    <!-- =================== EXPENSES SECTION =================== -->
+    <section class="content-section" id="section-expenses">
+
+      <div class="section-toolbar">
+        <div class="category-tabs" id="categoryTabs">
+          <button class="cat-tab active" data-category="all">All</button>
+          <button class="cat-tab" data-category="food">🍔 Food</button>
+          <button class="cat-tab" data-category="travel">✈️ Travel</button>
+          <button class="cat-tab" data-category="housing">🏠 Housing</button>
+          <button class="cat-tab" data-category="health">⚕️ Health</button>
+          <button class="cat-tab" data-category="entertainment">🎬 Entertainment</button>
+          <button class="cat-tab" data-category="utilities">⚡ Utilities</button>
+          <button class="cat-tab" data-category="shopping">🛍️ Shopping</button>
+          <button class="cat-tab" data-category="other">📦 Other</button>
+        </div>
+        <button class="btn-primary" id="addExpenseBtn">+ Add Expense</button>
+      </div>
+
+      <div class="expense-summary-strip">
+        <div class="strip-item">
+          <span>Total This Month</span>
+          <strong id="stripTotal">$3,240</strong>
+        </div>
+        <div class="strip-item">
+          <span>Transactions</span>
+          <strong id="stripCount">10</strong>
+        </div>
+        <div class="strip-item">
+          <span>Avg Per Day</span>
+          <strong id="stripAvg">$108</strong>
+        </div>
+        <div class="strip-item">
+          <span>Largest Expense</span>
+          <strong id="stripLargest">$1,200 (Housing)</strong>
+        </div>
+      </div>
+
+      <div class="table-card full-width">
+        <table class="data-table" id="expensesTable">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Description</th>
+              <th>Category</th>
+              <th>Payment</th>
+              <th>Amount</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="expensesTableBody"></tbody>
+        </table>
+      </div>
+
+    </section>
+
+
+    <!-- =================== INVESTMENTS SECTION =================== -->
+    <section class="content-section" id="section-investments">
+
+      <div class="cards-grid">
+        <div class="summary-card invest-total">
+          <div class="card-icon">💰</div>
+          <div class="card-content">
+            <span class="card-label">Total Invested</span>
+            <span class="card-value">$85,000</span>
+            <span class="card-change">Principal amount</span>
+          </div>
+        </div>
+        <div class="summary-card invest-value">
+          <div class="card-icon">📈</div>
+          <div class="card-content">
+            <span class="card-label">Current Value</span>
+            <span class="card-value">$98,750</span>
+            <span class="card-change positive">+16.2% overall return</span>
+          </div>
+        </div>
+        <div class="summary-card invest-gain">
+          <div class="card-icon">✅</div>
+          <div class="card-content">
+            <span class="card-label">Total Gain</span>
+            <span class="card-value">$13,750</span>
+            <span class="card-change positive">Unrealized P&amp;L</span>
+          </div>
+        </div>
+        <div class="summary-card invest-month">
+          <div class="card-icon">📅</div>
+          <div class="card-content">
+            <span class="card-label">Monthly Return</span>
+            <span class="card-value">+1.8%</span>
+            <span class="card-change positive">vs 1.2% last month</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="charts-row">
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>Portfolio Allocation</h3>
+            <span class="chart-subtitle">By Asset Type</span>
+          </div>
+          <div class="chart-container">
+            <canvas id="portfolioChart"></canvas>
+          </div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>Portfolio Performance</h3>
+            <span class="chart-subtitle">Last 12 Months</span>
+          </div>
+          <div class="chart-container">
+            <canvas id="performanceChart"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-card full-width">
+        <div class="table-header">
+          <h3>Holdings</h3>
+          <button class="btn-primary" id="addInvestmentBtn">+ Add Investment</button>
+        </div>
+        <table class="data-table" id="investmentsTable">
+          <thead>
+            <tr>
+              <th>Asset</th>
+              <th>Type</th>
+              <th>Units</th>
+              <th>Buy Price</th>
+              <th>Current Price</th>
+              <th>Current Value</th>
+              <th>Gain / Loss</th>
+              <th>Return %</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="investmentsTableBody"></tbody>
+        </table>
+      </div>
+
+    </section>
+
+
+    <!-- =================== SAVINGS SECTION =================== -->
+    <section class="content-section" id="section-savings">
+
+      <div class="cards-grid">
+        <div class="summary-card savings-total">
+          <div class="card-icon">🏦</div>
+          <div class="card-content">
+            <span class="card-label">Total Savings</span>
+            <span class="card-value">$25,750</span>
+            <span class="card-change positive">Liquid + Fixed deposits</span>
+          </div>
+        </div>
+        <div class="summary-card savings-month">
+          <div class="card-icon">📅</div>
+          <div class="card-content">
+            <span class="card-label">This Month</span>
+            <span class="card-value">$3,260</span>
+            <span class="card-change positive">+$200 vs last month</span>
+          </div>
+        </div>
+        <div class="summary-card savings-rate">
+          <div class="card-icon">%</div>
+          <div class="card-content">
+            <span class="card-label">Savings Rate</span>
+            <span class="card-value">50.2%</span>
+            <span class="card-change positive">Above 30% target ✓</span>
+          </div>
+        </div>
+        <div class="summary-card savings-goal">
+          <div class="card-icon">🎯</div>
+          <div class="card-content">
+            <span class="card-label">Annual Goal</span>
+            <span class="card-value">$36,000</span>
+            <span class="card-change">$10,250 remaining</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Savings History Chart -->
+      <div class="charts-row">
+        <div class="chart-card wide">
+          <div class="chart-header">
+            <h3>Monthly Savings History</h3>
+            <span class="chart-subtitle">Last 12 Months — Income vs Expenses vs Saved</span>
+          </div>
+          <div class="chart-container tall">
+            <canvas id="savingsHistoryChart"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Savings Goals -->
+      <div class="table-card full-width">
+        <div class="table-header">
+          <h3>Savings Goals</h3>
+          <button class="btn-primary" id="addGoalBtn">+ Add Goal</button>
+        </div>
+        <div class="goals-grid" id="goalsGrid"></div>
+      </div>
+
+      <!-- Monthly Savings Log -->
+      <div class="table-card full-width">
+        <div class="table-header">
+          <h3>Monthly Savings Log</h3>
+        </div>
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Month</th>
+              <th>Income</th>
+              <th>Expenses</th>
+              <th>Saved</th>
+              <th>Savings Rate</th>
+              <th>Cumulative Savings</th>
+            </tr>
+          </thead>
+          <tbody id="savingsTableBody"></tbody>
+        </table>
+      </div>
+
+    </section>
+
+  </main><!-- end main-content -->
+
+
+  <!-- ===================== MODALS ===================== -->
+
+  <!-- Add Expense Modal -->
+  <div class="modal-overlay" id="expenseModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>Add Expense</h2>
+        <button class="modal-close" data-modal="expenseModal">&#x2715;</button>
+      </div>
+      <div class="modal-body">
+        <form id="expenseForm" autocomplete="off">
+          <div class="form-row">
+            <div class="form-group">
+              <label>Date</label>
+              <input type="date" id="expDate" name="date" required />
+            </div>
+            <div class="form-group">
+              <label>Amount ($)</label>
+              <input type="number" id="expAmount" name="amount" placeholder="0.00" min="0.01" step="0.01" required />
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Description</label>
+            <input type="text" id="expDesc" name="description" placeholder="e.g. Grocery shopping" maxlength="120" required />
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Category</label>
+              <select id="expCategory" name="category" required>
+                <option value="">Select category</option>
+                <option value="food">🍔 Food</option>
+                <option value="travel">✈️ Travel</option>
+                <option value="housing">🏠 Housing</option>
+                <option value="health">⚕️ Health</option>
+                <option value="entertainment">🎬 Entertainment</option>
+                <option value="utilities">⚡ Utilities</option>
+                <option value="shopping">🛍️ Shopping</option>
+                <option value="other">📦 Other</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Payment Method</label>
+              <select id="expPayment" name="payment">
+                <option value="card">Credit Card</option>
+                <option value="debit">Debit Card</option>
+                <option value="cash">Cash</option>
+                <option value="transfer">Bank Transfer</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Notes (optional)</label>
+            <textarea id="expNotes" name="notes" placeholder="Additional notes..." maxlength="300"></textarea>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="btn-secondary" data-modal="expenseModal">Cancel</button>
+            <button type="submit" class="btn-primary">Add Expense</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Investment Modal -->
+  <div class="modal-overlay" id="investmentModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>Add Investment</h2>
+        <button class="modal-close" data-modal="investmentModal">&#x2715;</button>
+      </div>
+      <div class="modal-body">
+        <form id="investmentForm" autocomplete="off">
+          <div class="form-row">
+            <div class="form-group">
+              <label>Asset Name / Ticker</label>
+              <input type="text" id="invAsset" name="asset" placeholder="e.g. AAPL or S&P 500 ETF" maxlength="60" required />
+            </div>
+            <div class="form-group">
+              <label>Asset Type</label>
+              <select id="invType" name="type" required>
+                <option value="">Select type</option>
+                <option value="stock">Stocks</option>
+                <option value="etf">ETF / Index Fund</option>
+                <option value="crypto">Crypto</option>
+                <option value="bond">Bonds</option>
+                <option value="real_estate">Real Estate</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Units / Shares</label>
+              <input type="number" id="invUnits" name="units" placeholder="0" min="0.001" step="0.001" required />
+            </div>
+            <div class="form-group">
+              <label>Buy Price ($)</label>
+              <input type="number" id="invBuyPrice" name="buyPrice" placeholder="0.00" min="0.01" step="0.01" required />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Current Price ($)</label>
+              <input type="number" id="invCurrPrice" name="currentPrice" placeholder="0.00" min="0.01" step="0.01" required />
+            </div>
+            <div class="form-group">
+              <label>Purchase Date</label>
+              <input type="date" id="invDate" name="date" required />
+            </div>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="btn-secondary" data-modal="investmentModal">Cancel</button>
+            <button type="submit" class="btn-primary">Add Investment</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Savings Goal Modal -->
+  <div class="modal-overlay" id="goalModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>Add Savings Goal</h2>
+        <button class="modal-close" data-modal="goalModal">&#x2715;</button>
+      </div>
+      <div class="modal-body">
+        <form id="goalForm" autocomplete="off">
+          <div class="form-group">
+            <label>Goal Name</label>
+            <input type="text" id="goalName" name="name" placeholder="e.g. Emergency Fund" maxlength="80" required />
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Target Amount ($)</label>
+              <input type="number" id="goalTarget" name="target" placeholder="0" min="1" step="100" required />
+            </div>
+            <div class="form-group">
+              <label>Saved So Far ($)</label>
+              <input type="number" id="goalCurrent" name="current" placeholder="0" min="0" step="100" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Target Date</label>
+              <input type="date" id="goalDate" name="date" required />
+            </div>
+            <div class="form-group">
+              <label>Icon</label>
+              <select id="goalIcon" name="icon">
+                <option value="🏠">🏠 Home</option>
+                <option value="🚗">🚗 Car</option>
+                <option value="✈️">✈️ Travel</option>
+                <option value="🎓">🎓 Education</option>
+                <option value="🏥">🏥 Emergency Fund</option>
+                <option value="💍">💍 Wedding</option>
+                <option value="💻">💻 Tech / Gadget</option>
+                <option value="🎯">🎯 Other</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="btn-secondary" data-modal="goalModal">Cancel</button>
+            <button type="submit" class="btn-primary">Add Goal</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
