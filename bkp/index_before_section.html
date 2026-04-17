@@ -264,7 +264,7 @@
           <div class="card-icon">💰</div>
           <div class="card-content">
             <span class="card-label">Total Invested</span>
-            <span class="card-value">₹85,000</span>
+            <span class="card-value" id="invTotalInvested">₹0</span>
             <span class="card-change">Principal amount</span>
           </div>
         </div>
@@ -272,24 +272,24 @@
           <div class="card-icon">📈</div>
           <div class="card-content">
             <span class="card-label">Current Value</span>
-            <span class="card-value">₹98,750</span>
-            <span class="card-change positive">+16.2% overall return</span>
+            <span class="card-value" id="invTotalCurrent">₹0</span>
+            <span class="card-change positive">Portfolio value</span>
           </div>
         </div>
         <div class="summary-card invest-gain">
           <div class="card-icon">✅</div>
           <div class="card-content">
-            <span class="card-label">Total Gain</span>
-            <span class="card-value">₹13,750</span>
-            <span class="card-change positive">Unrealized P&amp;L</span>
+            <span class="card-label">Total Gain / Loss</span>
+            <span class="card-value" id="invTotalGain">₹0</span>
+            <span class="card-change">Unrealized P&amp;L</span>
           </div>
         </div>
         <div class="summary-card invest-month">
-          <div class="card-icon">📅</div>
+          <div class="card-icon">%</div>
           <div class="card-content">
-            <span class="card-label">Monthly Return</span>
-            <span class="card-value">+1.8%</span>
-            <span class="card-change positive">vs 1.2% last month</span>
+            <span class="card-label">Overall Return</span>
+            <span class="card-value" id="invOverallReturn">0%</span>
+            <span class="card-change">Weighted average</span>
           </div>
         </div>
       </div>
@@ -298,7 +298,7 @@
         <div class="chart-card">
           <div class="chart-header">
             <h3>Portfolio Allocation</h3>
-            <span class="chart-subtitle">By Asset Type</span>
+            <span class="chart-subtitle">By Category</span>
           </div>
           <div class="chart-container">
             <canvas id="portfolioChart"></canvas>
@@ -315,31 +315,78 @@
         </div>
       </div>
 
-      <div class="table-card full-width">
-        <div class="table-header">
-          <h3>Holdings</h3>
-          <div style="display:flex;gap:8px;">
-            <button class="btn-danger" id="clearInvestmentsBtn">🗑️ Clear All</button>
-            <button class="btn-primary" id="addInvestmentBtn">+ Add Investment</button>
+      <!-- Add Investment button -->
+      <div class="section-toolbar" style="justify-content:flex-end;">
+        <div style="display:flex;gap:8px;">
+          <button class="btn-danger" id="clearInvestmentsBtn">🗑️ Clear All</button>
+          <button class="btn-primary" id="addInvestmentBtn">+ Add Investment</button>
+        </div>
+      </div>
+
+      <!-- ===== Two side-by-side selector tiles ===== -->
+      <div class="inv-tiles-row">
+
+        <div class="inv-tile-card inv-tile-market active" data-inv-panel="market" id="tileCardMarket">
+          <div class="inv-tile-left">
+            <div class="inv-tile-icon-wrap market-icon">📈</div>
+            <div>
+              <h3>Stocks &amp; Mutual Funds</h3>
+              <p>Local · Foreign · Mutual Funds</p>
+            </div>
+          </div>
+          <div class="inv-tile-numbers">
+            <div class="inv-tile-num">
+              <span>Invested</span>
+              <strong id="tileMktInvested">₹0</strong>
+            </div>
+            <div class="inv-tile-num">
+              <span>Current Value</span>
+              <strong id="tileMktCurrent">₹0</strong>
+            </div>
+            <div class="inv-tile-num">
+              <span>P&amp;L</span>
+              <strong id="tileMktGain" class="gain-positive">₹0</strong>
+            </div>
+          </div>
+          <div class="inv-tile-footer">
+            <span class="inv-tile-badge" id="tileMktCount">0 holdings</span>
+            <span class="inv-tile-arrow">→</span>
           </div>
         </div>
-        <table class="data-table" id="investmentsTable">
-          <thead>
-            <tr>
-              <th>Asset</th>
-              <th>Type</th>
-              <th>Units</th>
-              <th>Buy Price</th>
-              <th>Current Price</th>
-              <th>Current Value</th>
-              <th>Gain / Loss</th>
-              <th>Return %</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="investmentsTableBody"></tbody>
-        </table>
+
+        <div class="inv-tile-card inv-tile-other" data-inv-panel="other" id="tileCardOther">
+          <div class="inv-tile-left">
+            <div class="inv-tile-icon-wrap other-icon">🏦</div>
+            <div>
+              <h3>Other Investments</h3>
+              <p>Gold · PPF · NPS · FD</p>
+            </div>
+          </div>
+          <div class="inv-tile-numbers">
+            <div class="inv-tile-num">
+              <span>Invested</span>
+              <strong id="tileOthInvested">₹0</strong>
+            </div>
+            <div class="inv-tile-num">
+              <span>Current Value</span>
+              <strong id="tileOthCurrent">₹0</strong>
+            </div>
+            <div class="inv-tile-num">
+              <span>P&amp;L</span>
+              <strong id="tileOthGain" class="gain-positive">₹0</strong>
+            </div>
+          </div>
+          <div class="inv-tile-footer">
+            <span class="inv-tile-badge" id="tileOthCount">0 holdings</span>
+            <span class="inv-tile-arrow">→</span>
+          </div>
+        </div>
+
       </div>
+
+      <!-- Detail panels (toggled by tile click) -->
+      <div class="inv-panel active" id="inv-panel-market"></div>
+      <div class="inv-panel" id="inv-panel-other"></div>
 
     </section>
 
@@ -405,6 +452,14 @@
           </div>
         </div>
         <div class="goals-grid" id="goalsGrid"></div>
+      </div>
+
+      <!-- Emergency Fund -->
+      <div class="table-card full-width">
+        <div class="table-header">
+          <h3>Emergency Fund</h3>
+        </div>
+        <div id="emergencyFundCard" class="emergency-fund-card"></div>
       </div>
 
       <!-- Monthly Savings Log -->
@@ -506,21 +561,26 @@
         <form id="investmentForm" autocomplete="off">
           <div class="form-row">
             <div class="form-group">
-              <label>Asset Name / Ticker</label>
-              <input type="text" id="invAsset" name="asset" placeholder="e.g. AAPL or S&P 500 ETF" maxlength="60" required />
+              <label>Asset Ticker / Code</label>
+              <input type="text" id="invAsset" name="asset" placeholder="e.g. AAPL, VOO, GOLD" maxlength="60" required />
             </div>
             <div class="form-group">
-              <label>Asset Type</label>
-              <select id="invType" name="type" required>
-                <option value="">Select type</option>
-                <option value="stock">Stocks</option>
-                <option value="etf">ETF / Index Fund</option>
-                <option value="crypto">Crypto</option>
-                <option value="bond">Bonds</option>
-                <option value="real_estate">Real Estate</option>
-                <option value="other">Other</option>
-              </select>
+              <label>Asset Name</label>
+              <input type="text" id="invName" name="assetName" placeholder="e.g. Apple Inc." maxlength="120" />
             </div>
+          </div>
+          <div class="form-group">
+            <label>Investment Category</label>
+            <select id="invType" name="type" required>
+              <option value="">Select category</option>
+              <option value="mutual_funds">📊 Mutual Funds</option>
+              <option value="stocks">📈 Stocks</option>
+              <option value="gold">🥇 Gold</option>
+              <option value="foreign_stocks">🌍 Foreign Stocks</option>
+              <option value="ppf">🏛️ PPF</option>
+              <option value="nps">👴 NPS</option>
+              <option value="fixed_deposit">🏦 Fixed Deposit</option>
+            </select>
           </div>
           <div class="form-row">
             <div class="form-group">
@@ -528,13 +588,13 @@
               <input type="number" id="invUnits" name="units" placeholder="0" min="0.001" step="0.001" required />
             </div>
             <div class="form-group">
-              <label>Buy Price (₹)</label>
+              <label>Buy Price (₹ per unit)</label>
               <input type="number" id="invBuyPrice" name="buyPrice" placeholder="0.00" min="0.01" step="0.01" required />
             </div>
           </div>
           <div class="form-row">
             <div class="form-group">
-              <label>Current Price (₹)</label>
+              <label>Current Price (₹ per unit)</label>
               <input type="number" id="invCurrPrice" name="currentPrice" placeholder="0.00" min="0.01" step="0.01" required />
             </div>
             <div class="form-group">
@@ -545,6 +605,38 @@
           <div class="form-actions">
             <button type="button" class="btn-secondary" data-modal="investmentModal">Cancel</button>
             <button type="submit" class="btn-primary">Add Investment</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Trade (Buy/Sell) Modal -->
+  <div class="modal-overlay" id="tradeModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 id="tradeAction">Buy More</h2>
+        <button class="modal-close" data-modal="tradeModal">&#x2715;</button>
+      </div>
+      <div class="modal-body">
+        <div class="trade-info">
+          <p><strong id="tradeAssetName">AAPL — Apple Inc.</strong></p>
+          <p>Current Holdings: <strong id="tradeCurrentUnits">0</strong> units &bull; Value: <strong id="tradeCurrentValue">₹0</strong></p>
+        </div>
+        <form id="tradeForm" autocomplete="off">
+          <div class="form-row">
+            <div class="form-group">
+              <label>Units</label>
+              <input type="number" id="tradeUnits" name="units" placeholder="0" min="0.001" step="0.001" required />
+            </div>
+            <div class="form-group">
+              <label>Price per Unit (₹)</label>
+              <input type="number" id="tradePrice" name="price" placeholder="0.00" min="0.01" step="0.01" required />
+            </div>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="btn-secondary" data-modal="tradeModal">Cancel</button>
+            <button type="submit" class="btn-primary">Confirm</button>
           </div>
         </form>
       </div>
@@ -596,6 +688,32 @@
           <div class="form-actions">
             <button type="button" class="btn-secondary" data-modal="goalModal">Cancel</button>
             <button type="submit" class="btn-primary">Add Goal</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Emergency Fund Modal ===== -->
+  <div class="modal-overlay" id="emergencyFundModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>🛡️ Update Emergency Fund</h3>
+        <button class="modal-close" data-modal="emergencyFundModal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="emergencyFundForm">
+          <div class="form-group">
+            <label>Target Amount (₹)</label>
+            <input type="number" id="efTarget" name="efTarget" placeholder="e.g. 100000" min="0" step="1" required />
+          </div>
+          <div class="form-group">
+            <label>Current Amount (₹)</label>
+            <input type="number" id="efCurrent" name="efCurrent" placeholder="e.g. 50000" min="0" step="1" required />
+          </div>
+          <div class="form-actions">
+            <button type="button" class="btn-secondary" data-modal="emergencyFundModal">Cancel</button>
+            <button type="submit" class="btn-primary">Save</button>
           </div>
         </form>
       </div>

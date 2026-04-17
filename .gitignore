@@ -1,0 +1,5 @@
+documents/
+data.xlsx
+config/
+__pycache__/
+*.pyc
