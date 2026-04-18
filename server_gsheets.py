@@ -24,8 +24,30 @@ import requests as http_requests   # avoid clash with flask.request
 
 # ─── Config ─────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).resolve().parent
-CREDS_FILE = BASE_DIR / "config" / "fintrack-493517-0fc9cad0c9c8.json"
-SPREADSHEET_ID = "179J-FOXHWPz0g19NJy0GxS-SYxRvClS4-IsL6hW7-2U"
+CONFIG_DIR = BASE_DIR / "config"
+
+# Load settings from config/gsheets.env
+_env_file = CONFIG_DIR / "gsheets.env"
+if _env_file.exists():
+    for line in _env_file.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, val = line.split("=", 1)
+            os.environ.setdefault(key.strip(), val.strip())
+
+CREDS_FILE = CONFIG_DIR / os.environ.get("GSHEETS_CREDS_FILE", "credentials.json")
+SPREADSHEET_ID = os.environ.get("GSHEETS_SPREADSHEET_ID", "")
+
+if not CREDS_FILE.exists():
+    raise FileNotFoundError(
+        f"Credentials file not found: {CREDS_FILE}\n"
+        f"Place your service account JSON in config/ and update config/gsheets.env"
+    )
+if not SPREADSHEET_ID:
+    raise ValueError(
+        "GSHEETS_SPREADSHEET_ID not set.\n"
+        "Add it to config/gsheets.env or set it as an environment variable."
+    )
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -793,132 +815,480 @@ def proxy_mf_price(scheme_code):
 
 
 # ═══════════════════════════════════════════════════════════════
-#  API: DOCUMENTS
+#  API: EXPORT / DOWNLOAD EXCEL
 # ═══════════════════════════════════════════════════════════════
 
-DOCS_DIR = BASE_DIR / "documents"
-DOC_CATEGORIES = ["salary_slips", "tax", "insurance", "investments", "bank_statements"]
+@app.route("/api/export")
+def export_excel():
+    """Download all Google Sheets data as an Excel file."""
+    import openpyxl, io as _io
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    sh = _get_spreadsheet()
+    for ws in sh.worksheets():
+        rows = ws.get_all_values()
+        xl_ws = wb.create_sheet(title=ws.title)
+        for row in rows:
+            xl_ws.append(row)
+    buf = _io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    from flask import send_file
+    return send_file(buf, download_name="FinTrack_data.xlsx", as_attachment=True,
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-import re
+
+# ═══════════════════════════════════════════════════════════════
+#  API: DOCUMENTS  (Google Drive backend)
+# ═══════════════════════════════════════════════════════════════
+
+DEFAULT_DOC_CATEGORIES = ["salary_slips", "tax", "insurance", "investments", "bank_statements"]
+DRIVE_PARENT_FOLDER_NAME = "Finances"
+DRIVE_DOCS_FOLDER_NAME = "FinTrack_Documents"
+
+import re, io, shutil
 from werkzeug.utils import secure_filename
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request as AuthRequest
+import pickle
 
 
-def _ensure_doc_dirs():
-    """Create documents folder structure if missing."""
-    for cat in DOC_CATEGORIES:
+def _valid_category(name):
+    """Check category name is safe (prevents path traversal)."""
+    return bool(re.match(r'^[a-z][a-z0-9_]{0,49}$', name))
+
+_drive_service = None
+_drive_folder_cache = {}   # (parent_id, name) → folder_id
+
+# Categories cache to avoid N+1 Drive API calls on every page load
+import time as _time
+_categories_cache = None      # dict: {cat_name: [years...]}
+_categories_cache_ts = 0      # timestamp of last fetch
+_CATEGORIES_CACHE_TTL = 60    # seconds
+
+# OAuth2 client secret file for Drive (user credentials)
+OAUTH_CLIENT_FILE = CONFIG_DIR / os.environ.get("DRIVE_OAUTH_CLIENT_FILE", "client_secret.json")
+OAUTH_TOKEN_FILE = CONFIG_DIR / "drive_token.pickle"
+
+DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
+
+
+def _get_drive():
+    """Return a cached Google Drive API service using OAuth2 user credentials."""
+    global _drive_service
+    if _drive_service is not None:
+        return _drive_service
+    with _gs_lock:
+        if _drive_service is not None:
+            return _drive_service
+
+        creds = None
+
+        # Load cached token
+        if OAUTH_TOKEN_FILE.exists():
+            with open(OAUTH_TOKEN_FILE, "rb") as f:
+                creds = pickle.load(f)
+
+        # Refresh or run OAuth flow
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(AuthRequest())
+        elif not creds or not creds.valid:
+            if not OAUTH_CLIENT_FILE.exists():
+                raise FileNotFoundError(
+                    f"OAuth client secret not found: {OAUTH_CLIENT_FILE}\n"
+                    f"Create a Desktop OAuth Client ID in Google Cloud Console,\n"
+                    f"download the JSON, and save it to config/client_secret.json"
+                )
+            flow = InstalledAppFlow.from_client_secrets_file(
+                str(OAUTH_CLIENT_FILE), scopes=DRIVE_SCOPES
+            )
+            creds = flow.run_local_server(port=0)
+
+        # Save token for next time
+        with open(OAUTH_TOKEN_FILE, "wb") as f:
+            pickle.dump(creds, f)
+
+        _drive_service = build("drive", "v3", credentials=creds, cache_discovery=False)
+        return _drive_service
+
+
+def _reset_drive():
+    """Reset the cached Drive service (e.g. after SSL errors)."""
+    global _drive_service
+    _drive_service = None
+
+
+import ssl as _ssl
+from functools import wraps as _wraps
+
+def _drive_retry(func):
+    """Decorator: retry once on transient SSL/connection errors by resetting the Drive service."""
+    @_wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except (_ssl.SSLError, ConnectionError, OSError):
+            _reset_drive()
+            return func(*args, **kwargs)
+    return wrapper
+
+
+def _find_or_create_folder(name, parent_id=None):
+    """Find a folder by name under parent, or create it. Cached."""
+    cache_key = (parent_id, name)
+    if cache_key in _drive_folder_cache:
+        return _drive_folder_cache[cache_key]
+
+    drive = _get_drive()
+    q = f"name='{name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    if parent_id:
+        q += f" and '{parent_id}' in parents"
+
+    results = drive.files().list(q=q, fields="files(id,name)", pageSize=1).execute()
+    files = results.get("files", [])
+
+    if files:
+        fid = files[0]["id"]
+    else:
+        meta = {"name": name, "mimeType": "application/vnd.google-apps.folder"}
+        if parent_id:
+            meta["parents"] = [parent_id]
+        folder = drive.files().create(body=meta, fields="id").execute()
+        fid = folder["id"]
+
+    _drive_folder_cache[cache_key] = fid
+    return fid
+
+
+def _get_finance_folder():
+    """Get (or create) the top-level Finance folder in Drive."""
+    return _find_or_create_folder(DRIVE_PARENT_FOLDER_NAME)
+
+
+def _get_doc_folder(category, year):
+    """Get (or create) the Drive folder: Finance/FinTrack_Documents/<category>/<year>"""
+    finance_id = _get_finance_folder()
+    docs_id = _find_or_create_folder(DRIVE_DOCS_FOLDER_NAME, finance_id)
+    cat_id = _find_or_create_folder(category, docs_id)
+    year_id = _find_or_create_folder(year, cat_id)
+    return year_id
+
+
+def _move_spreadsheet_to_finance():
+    """Move the FinTrack spreadsheet into the Finance folder if not already there."""
+    drive = _get_drive()
+    finance_id = _get_finance_folder()
+    # Check current parents
+    f = drive.files().get(fileId=SPREADSHEET_ID, fields="parents").execute()
+    current_parents = f.get("parents", [])
+    if finance_id not in current_parents:
+        prev = ",".join(current_parents)
+        drive.files().update(
+            fileId=SPREADSHEET_ID,
+            addParents=finance_id,
+            removeParents=prev,
+            fields="id,parents"
+        ).execute()
+        print(f"  Moved spreadsheet into Drive/{DRIVE_PARENT_FOLDER_NAME}/")
+
+
+def _find_folder(name, parent_id):
+    """Find a folder by name under parent. Returns folder ID or None."""
+    cache_key = (parent_id, name)
+    if cache_key in _drive_folder_cache:
+        return _drive_folder_cache[cache_key]
+    drive = _get_drive()
+    q = f"name='{name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    if parent_id:
+        q += f" and '{parent_id}' in parents"
+    results = drive.files().list(q=q, fields="files(id)", pageSize=1).execute()
+    files = results.get("files", [])
+    if files:
+        fid = files[0]["id"]
+        _drive_folder_cache[cache_key] = fid
+        return fid
+    return None
+
+
+def _get_docs_root_id():
+    """Get the FinTrack_Documents folder ID."""
+    finance_id = _get_finance_folder()
+    return _find_or_create_folder(DRIVE_DOCS_FOLDER_NAME, finance_id)
+
+
+def _ensure_drive_folders():
+    """Pre-create the default folder tree in Drive."""
+    for cat in DEFAULT_DOC_CATEGORIES:
         for yr in range(2024, datetime.now().year + 1):
-            (DOCS_DIR / cat / str(yr)).mkdir(parents=True, exist_ok=True)
+            _get_doc_folder(cat, str(yr))
 
 
 @app.route("/api/documents/<category>/<year>")
+@_drive_retry
 def list_documents(category, year):
-    """List all documents in a category/year folder."""
-    if category not in DOC_CATEGORIES:
+    """List all documents in a Drive category/year folder."""
+    if not _valid_category(category):
         return jsonify({"error": "Invalid category"}), 400
     if not re.match(r'^\d{4}$', year):
         return jsonify({"error": "Invalid year"}), 400
 
-    folder = DOCS_DIR / category / year
-    if not folder.exists():
-        return jsonify([])
+    drive = _get_drive()
+    folder_id = _get_doc_folder(category, year)
+    q = f"'{folder_id}' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'"
+    results = drive.files().list(
+        q=q, fields="files(id,name,size,modifiedTime)", orderBy="name"
+    ).execute()
 
     files = []
-    for f in sorted(folder.iterdir()):
-        if f.is_file() and not f.name.startswith('.'):
-            stat = f.stat()
-            files.append({
-                "name": f.name,
-                "size": stat.st_size,
-                "modified": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
-            })
+    for f in results.get("files", []):
+        files.append({
+            "name": f["name"],
+            "size": int(f.get("size", 0)),
+            "modified": f.get("modifiedTime", "")[:16].replace("T", " "),
+            "driveId": f["id"],
+        })
     return jsonify(files)
 
 
 @app.route("/api/documents/<category>/<year>/upload", methods=["POST"])
+@_drive_retry
 def upload_document(category, year):
-    """Upload one or more files to a category/year folder."""
-    if category not in DOC_CATEGORIES:
+    """Upload files to Google Drive category/year folder."""
+    if not _valid_category(category):
         return jsonify({"error": "Invalid category"}), 400
     if not re.match(r'^\d{4}$', year):
         return jsonify({"error": "Invalid year"}), 400
 
-    folder = DOCS_DIR / category / year
-    folder.mkdir(parents=True, exist_ok=True)
+    drive = _get_drive()
+    folder_id = _get_doc_folder(category, year)
 
     uploaded = []
     for f in request.files.getlist("files"):
         if not f.filename:
             continue
-        orig = secure_filename(f.filename)
-        stem = Path(orig).stem
-        ext = Path(orig).suffix
-        today = datetime.now()
-        new_name = f"{stem}_{today:%d_%b_%Y}{ext}"
-        dest = folder / new_name
+        new_name = secure_filename(f.filename)
+
+        # Check for duplicates in Drive folder
+        stem = Path(new_name).stem
+        ext = Path(new_name).suffix
+        q = f"name='{new_name}' and '{folder_id}' in parents and trashed=false"
+        existing = drive.files().list(q=q, fields="files(id)", pageSize=1).execute().get("files", [])
         counter = 1
-        while dest.exists():
-            new_name = f"{stem}_{today:%d_%b_%Y}_{counter}{ext}"
-            dest = folder / new_name
+        while existing:
+            new_name = f"{stem}_{counter}{ext}"
+            q = f"name='{new_name}' and '{folder_id}' in parents and trashed=false"
+            existing = drive.files().list(q=q, fields="files(id)", pageSize=1).execute().get("files", [])
             counter += 1
-        f.save(str(dest))
+
+        file_meta = {"name": new_name, "parents": [folder_id]}
+        content = f.read()
+        media = MediaIoBaseUpload(io.BytesIO(content), mimetype=f.content_type or "application/octet-stream")
+        drive.files().create(body=file_meta, media_body=media, fields="id").execute()
         uploaded.append(new_name)
 
     return jsonify({"ok": True, "uploaded": uploaded, "count": len(uploaded)})
 
 
 @app.route("/api/documents/<category>/<year>/<filename>")
+@_drive_retry
 def download_document(category, year, filename):
-    """Download a specific document."""
-    if category not in DOC_CATEGORIES:
+    """Download a file from Google Drive."""
+    if not _valid_category(category):
         return jsonify({"error": "Invalid category"}), 400
     if not re.match(r'^\d{4}$', year):
         return jsonify({"error": "Invalid year"}), 400
+
     safe_name = secure_filename(filename)
-    folder = DOCS_DIR / category / year
-    file_path = folder / safe_name
-    if not file_path.exists() or not file_path.is_file():
+    drive = _get_drive()
+    folder_id = _get_doc_folder(category, year)
+    q = f"name='{safe_name}' and '{folder_id}' in parents and trashed=false"
+    results = drive.files().list(q=q, fields="files(id,name,mimeType)", pageSize=1).execute()
+    files = results.get("files", [])
+    if not files:
         return jsonify({"error": "File not found"}), 404
-    return send_from_directory(str(folder), safe_name, as_attachment=True)
+
+    file_id = files[0]["id"]
+    req = drive.files().get_media(fileId=file_id)
+    buf = io.BytesIO()
+    downloader = MediaIoBaseDownload(buf, req)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+
+    buf.seek(0)
+    from flask import send_file
+    as_download = request.args.get("download") is not None
+    return send_file(buf, download_name=safe_name, as_attachment=as_download)
 
 
 @app.route("/api/documents/<category>/<year>/<filename>", methods=["DELETE"])
+@_drive_retry
 def delete_document(category, year, filename):
-    """Delete a specific document."""
-    if category not in DOC_CATEGORIES:
+    """Move a file to Drive trash."""
+    if not _valid_category(category):
         return jsonify({"error": "Invalid category"}), 400
     if not re.match(r'^\d{4}$', year):
         return jsonify({"error": "Invalid year"}), 400
+
     safe_name = secure_filename(filename)
-    folder = DOCS_DIR / category / year
-    file_path = folder / safe_name
-    if not file_path.exists() or not file_path.is_file():
+    drive = _get_drive()
+    folder_id = _get_doc_folder(category, year)
+    q = f"name='{safe_name}' and '{folder_id}' in parents and trashed=false"
+    results = drive.files().list(q=q, fields="files(id)", pageSize=1).execute()
+    files = results.get("files", [])
+    if not files:
         return jsonify({"error": "File not found"}), 404
-    file_path.unlink()
+
+    drive.files().update(fileId=files[0]["id"], body={"trashed": True}).execute()
     return jsonify({"ok": True, "deleted": safe_name})
+
+
+def _invalidate_categories_cache():
+    """Clear the categories cache so next request re-fetches from Drive."""
+    global _categories_cache, _categories_cache_ts
+    _categories_cache = None
+    _categories_cache_ts = 0
+
+
+@_drive_retry
+def _fetch_categories():
+    """Fetch categories from Drive, with in-memory caching."""
+    global _categories_cache, _categories_cache_ts
+    now = _time.time()
+    if _categories_cache is not None and (now - _categories_cache_ts) < _CATEGORIES_CACHE_TTL:
+        return _categories_cache
+
+    drive = _get_drive()
+    docs_id = _get_docs_root_id()
+    # List all category subfolders under FinTrack_Documents
+    q = f"'{docs_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    results = drive.files().list(q=q, fields="files(id,name)").execute()
+    cats = {}
+    for folder in sorted(results.get("files", []), key=lambda f: f["name"]):
+        cat_name = folder["name"]
+        if not _valid_category(cat_name):
+            continue
+        cat_id = folder["id"]
+        _drive_folder_cache[(docs_id, cat_name)] = cat_id
+        # List year subfolders
+        yq = f"'{cat_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        yr_results = drive.files().list(q=yq, fields="files(name)").execute()
+        years = sorted([f["name"] for f in yr_results.get("files", []) if f["name"].isdigit()], reverse=True)
+        cats[cat_name] = years
+
+    _categories_cache = cats
+    _categories_cache_ts = now
+    return cats
 
 
 @app.route("/api/documents/categories")
 def doc_categories():
-    """Return available categories and years."""
-    cats = {}
-    for cat in DOC_CATEGORIES:
-        cat_dir = DOCS_DIR / cat
-        years = []
-        if cat_dir.exists():
-            years = sorted([d.name for d in cat_dir.iterdir() if d.is_dir() and d.name.isdigit()], reverse=True)
-        cats[cat] = years
-    return jsonify(cats)
+    """Return available categories and years (discovered from Drive)."""
+    return jsonify(_fetch_categories())
+
+
+@app.route("/api/documents/categories", methods=["POST"])
+@_drive_retry
+def create_doc_category():
+    """Create a new document category folder in Drive."""
+    data = request.get_json(silent=True) or {}
+    raw = data.get("name", "").strip().lower().replace(" ", "_")
+    raw = re.sub(r'[^a-z0-9_]', '', raw)
+    if not _valid_category(raw):
+        return jsonify({"error": "Invalid name. Use letters, numbers, underscores."}), 400
+    docs_id = _get_docs_root_id()
+    if _find_folder(raw, docs_id) is not None:
+        return jsonify({"error": "Category already exists"}), 409
+    cat_id = _find_or_create_folder(raw, docs_id)
+    # Create current year subfolder
+    _find_or_create_folder(str(datetime.now().year), cat_id)
+    _invalidate_categories_cache()
+    return jsonify({"ok": True, "category": raw})
+
+
+@app.route("/api/documents/categories/<category>", methods=["DELETE"])
+@_drive_retry
+def delete_doc_category(category):
+    """Delete an empty document category from Drive (moves to trash)."""
+    if not _valid_category(category):
+        return jsonify({"error": "Invalid category"}), 400
+    drive = _get_drive()
+    docs_id = _get_docs_root_id()
+    cat_id = _find_folder(category, docs_id)
+    if cat_id is None:
+        return jsonify({"error": "Category not found"}), 404
+    # Check if any non-folder files exist under category tree
+    q = f"'{cat_id}' in parents and trashed=false"
+    children = drive.files().list(q=q, fields="files(id,mimeType,name)").execute().get("files", [])
+    for child in children:
+        if child["mimeType"] != "application/vnd.google-apps.folder":
+            return jsonify({"error": "Category is not empty. Delete all files first."}), 400
+        # Check year subfolders for files too
+        sq = f"'{child['id']}' in parents and trashed=false and mimeType!='application/vnd.google-apps.folder'"
+        sub_files = drive.files().list(q=sq, fields="files(id)", pageSize=1).execute().get("files", [])
+        if sub_files:
+            return jsonify({"error": "Category is not empty. Delete all files first."}), 400
+    drive.files().update(fileId=cat_id, body={"trashed": True}).execute()
+    _drive_folder_cache.pop((docs_id, category), None)
+    _invalidate_categories_cache()
+    return jsonify({"ok": True, "deleted": category})
+
+
+@app.route("/api/documents/categories/<category>/years", methods=["POST"])
+@_drive_retry
+def create_doc_year(category):
+    """Create a year folder inside a category in Drive."""
+    if not _valid_category(category):
+        return jsonify({"error": "Invalid category"}), 400
+    docs_id = _get_docs_root_id()
+    cat_id = _find_folder(category, docs_id)
+    if cat_id is None:
+        return jsonify({"error": "Category not found"}), 404
+    data = request.get_json(silent=True) or {}
+    year = str(data.get("year", "")).strip()
+    if not re.match(r'^\d{4}$', year):
+        return jsonify({"error": "Invalid year"}), 400
+    if _find_folder(year, cat_id) is not None:
+        return jsonify({"error": "Year already exists"}), 409
+    _find_or_create_folder(year, cat_id)
+    _invalidate_categories_cache()
+    return jsonify({"ok": True, "category": category, "year": year})
 
 
 # ═══════════════════════════════════════════════════════════════
 #  STARTUP
 # ═══════════════════════════════════════════════════════════════
 
+import atexit as _atexit
+import signal as _signal
+
+_UP_FILE = BASE_DIR / "server_gsheets.up_running"
+
+def _create_up_file():
+    _UP_FILE.write_text("")
+
+def _remove_up_file():
+    _UP_FILE.unlink(missing_ok=True)
+
+def _sigint_handler(sig, frame):
+    _remove_up_file()
+    raise SystemExit(0)
+
+_atexit.register(_remove_up_file)
+_signal.signal(_signal.SIGINT, _sigint_handler)
+
 if __name__ == "__main__":
+    _remove_up_file()  # clean stale marker
     print("\n  Connecting to Google Sheets...")
     _ensure_worksheets()
-    _ensure_doc_dirs()
+    print("  Setting up Google Drive folders...")
+    _move_spreadsheet_to_finance()
+    _ensure_drive_folders()
+    _fetch_categories()  # pre-warm cache
     port = int(os.environ.get("PORT", 5000))
     debug = os.environ.get("FLASK_DEBUG", "true").lower() in ("1", "true", "yes")
+    _create_up_file()
     print(f"\n  FinTrack server running at http://localhost:{port}\n")
     app.run(host="0.0.0.0", port=port, debug=debug)

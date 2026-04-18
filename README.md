@@ -2,6 +2,27 @@
 
 A modern, single-page personal finance dashboard built with vanilla HTML, CSS, and JavaScript. Track expenses, monitor investments, and manage savings goals — all in one place.
 
+## Quick Setup
+
+```bash
+# 1. Clone the repo
+git clone https://github.com/<your-username>/finance-tracker.git
+cd finance-tracker
+
+# 2. Install Python dependencies
+pip install -r requirements.txt
+
+# 3. Start the server
+python server.py
+
+# 4. Open in browser
+#    http://localhost:5000
+```
+
+> **Windows shortcut:** Just double-click **`start.bat`** — it handles everything (Python detection, dependency install, desktop shortcut, browser launch).
+
+> **Google Sheets backend:** Use `python server_gsheets.py` instead. Requires a service account JSON in `config/` — see [Google Sheets Setup](#google-sheets-setup).
+
 ---
 
 ## Table of Contents
@@ -18,11 +39,13 @@ A modern, single-page personal finance dashboard built with vanilla HTML, CSS, a
 5. [Server Options](#two-server-options)
 6. [Portable Deployment](#portable-deployment)
 7. [Google Sheets Setup](#google-sheets-setup)
-8. [Live Price Integration](#live-price-integration)
-9. [How Values Are Calculated](#how-values-are-calculated)
-10. [Project Structure](#project-structure)
-11. [Future Improvements](#future-improvements)
-12. [License](#license)
+8. [Google Drive (OAuth2) Setup](#google-drive-oauth2-setup)
+9. [Syncing Data](#syncing-data)
+10. [Live Price Integration](#live-price-integration)
+11. [How Values Are Calculated](#how-values-are-calculated)
+12. [Project Structure](#project-structure)
+13. [Future Improvements](#future-improvements)
+14. [License](#license)
 
 ---
 
@@ -98,12 +121,14 @@ Track savings progress and financial goals:
 
 Organize and manage your financial documents:
 
-- **5 Categories** — Salary Slips, Tax, Insurance, Investments, Bank Statements
-- **Year-Based Organization** — Filter by year (2024, 2025, 2026)
+- **Dynamic Categories** — Default categories (Salary Slips, Tax, Insurance, Investments, Bank Statements) plus create your own via the **＋** button
+- **Dynamic Year Folders** — Years discovered from actual folders; add new years via **＋** button
 - **Drag & Drop Upload** — Drop files directly or browse to upload
 - **Auto-Rename** — Files saved as `DocumentName_DD_Mon_YYYY.ext` with duplicate handling
 - **File Browser** — Table view with name, size, modified date
 - **Download & Delete** — One-click actions for each file
+- **Category Management** — Right-click a category tab to delete it (must be empty)
+- **Dual Backend** — Local filesystem (`server.py`) or Google Drive (`server_gsheets.py`)
 
 ## Features
 
@@ -146,10 +171,10 @@ python server.py
 
 ### Two Server Options
 
-| Server | Data Storage | Command |
-|--------|-------------|---------|
-| `server.py` | Local Excel file (`data.xlsx`) | `python server.py` |
-| `server_gsheets.py` | Google Sheets (cloud) | `python server_gsheets.py` |
+| Server | Data Storage | Documents | Command |
+|--------|-------------|-----------|--------|
+| `server.py` | Local Excel (`data.xlsx`) | Local filesystem (`documents/`) | `python server.py` |
+| `server_gsheets.py` | Google Sheets (cloud) | Google Drive (cloud, OAuth2) | `python server_gsheets.py` |
 
 #### `server.py` — Local Excel Backend
 
@@ -169,6 +194,9 @@ python server.py
 - Requires a **Google Cloud service account** JSON credentials file
 - Uses batch reads/writes to minimize API calls
 - Thread-safe with a shared gspread client
+- **Documents stored in Google Drive** — uploaded files go to `Finances/FinTrack_Documents/<category>/<year>/` folders
+- **OAuth2 for Drive** — uses your personal Google account (not the service account) for file uploads, so files count against your 15 GB quota. First run opens a browser for sign-in; tokens are cached in `config/drive_token.pickle`
+- **Service account for Sheets** — spreadsheet read/write uses the SA (no quota issues)
 - **Requires internet** — the app talks to Google APIs
 - Ideal for syncing data across multiple machines
 
@@ -194,17 +222,108 @@ Data (`data.xlsx`) is stored in the same folder — everything travels together.
 
 ## Google Sheets Setup
 
-To use `server_gsheets.py` with a different Google account:
+To use `server_gsheets.py` with your Google account:
 
-1. **Create a service account** in [Google Cloud Console](https://console.cloud.google.com/) → download the JSON key file
-2. **Drop the JSON file** into the `finance-tracker` folder
-3. **Update these two lines** in `server_gsheets.py`:
-   ```python
-   CREDS_FILE = BASE_DIR / "your-credentials-file.json"
-   SPREADSHEET_ID = "your-spreadsheet-id-here"
+1. **Create a Google Cloud project** at [console.cloud.google.com](https://console.cloud.google.com/)
+2. **Enable APIs** — Google Sheets API + Google Drive API
+3. **Create a service account** → download the JSON key file
+4. **Place the JSON file** in the `config/` folder
+5. **Copy the config template:**
+   ```bash
+   cp config/gsheets.env.example config/gsheets.env
    ```
-4. **Create a Google Sheet** → share it (Editor) with the service account email (found in the JSON under `client_email`)
-5. The **Spreadsheet ID** is in the sheet URL: `docs.google.com/spreadsheets/d/<THIS_PART>/edit`
+6. **Edit `config/gsheets.env`** with your values:
+   ```env
+   GSHEETS_CREDS_FILE=your-credentials-file.json
+   GSHEETS_SPREADSHEET_ID=your-spreadsheet-id-here
+   ```
+7. **Create a Google Sheet** → share it (Editor) with the service account email (found in the JSON under `client_email`)
+8. **Create a `Finances` folder** in Google Drive → share it (Editor) with the same service account email (needed for document uploads)
+9. **Set up OAuth2 for Drive** — see [Google Drive (OAuth2) Setup](#google-drive-oauth2-setup)
+
+> **Spreadsheet ID** is in the sheet URL: `docs.google.com/spreadsheets/d/<THIS_PART>/edit`
+
+> **Service account email** is in the JSON file under `client_email`
+
+> See [docs/GOOGLE_SERVICE_ACCOUNT.md](docs/GOOGLE_SERVICE_ACCOUNT.md) for a detailed explanation of how service accounts, authentication, and Drive sharing work.
+
+## Google Drive (OAuth2) Setup
+
+Google Drive file uploads require **OAuth2 user credentials** because service accounts have zero storage quota — they can create folders but not files.
+
+### Why OAuth2?
+
+| Operation | Service Account | OAuth2 (You) |
+|-----------|:-:|:-:|
+| Create/list/delete folders | ✅ | ✅ |
+| Read/download files | ✅ | ✅ |
+| Upload files | ❌ (0 quota) | ✅ (your 15 GB) |
+| Spreadsheet read/write | ✅ | N/A (uses SA) |
+
+### Setup Steps
+
+1. Go to [Google Cloud Console → Credentials](https://console.cloud.google.com/apis/credentials) → your project
+2. Click **Create Credentials → OAuth Client ID**
+3. If prompted for a consent screen:
+   - User type: **External**
+   - App name: `FinTrack`
+   - Add your email as a **Test user**
+4. Application type: **Desktop app** → name: `FinTrack Desktop` → Create
+5. Click **Download JSON** → save as `config/client_secret.json`
+6. Add to `config/gsheets.env`:
+   ```env
+   DRIVE_OAUTH_CLIENT_FILE=client_secret.json
+   ```
+7. Start the server: `python server_gsheets.py`
+   - Your browser opens for Google sign-in (one time)
+   - Token cached in `config/drive_token.pickle`
+   - Subsequent starts are automatic (no browser popup)
+   - Token auto-refreshes; re-login needed ~every 6 months
+
+### Architecture: SA + OAuth2
+
+```
+server_gsheets.py
+├── Sheets API ──→ Service Account (SA credentials)
+│   └── Expenses, Investments, Savings, etc.
+└── Drive API ───→ OAuth2 (your personal credentials)
+    └── Documents upload/download/list/delete
+```
+
+## Syncing Data
+
+**Drive is the golden source** when using `server_gsheets.py`. Use the sync script to pull everything to local storage:
+
+```bash
+# Sync everything (Sheets → data.xlsx + Drive docs → documents/)
+python sync_drive_to_local.py
+
+# Preview what would change (no writes)
+python sync_drive_to_local.py --dry-run
+
+# Just sync spreadsheet data
+python sync_drive_to_local.py --sheets-only
+
+# Just sync documents
+python sync_drive_to_local.py --docs-only
+```
+
+### What the sync script does
+
+| Source | Destination | Details |
+|--------|------------|--------|
+| Google Sheets (7 worksheets) | `data.xlsx` | Exports Expenses, Investments, Transactions, SavingsGoals, EmergencyFund, EFContributions, SavingsHistory |
+| Drive `FinTrack_Documents/` | `documents/` | Downloads all files; skips unchanged files (same size) |
+
+### Switching between servers
+
+Both servers use **identical API endpoints** — the frontend doesn't know or care which backend is running.
+
+| Scenario | Steps |
+|----------|------|
+| **Cloud → Local** | Run `python sync_drive_to_local.py`, then use `python server.py` |
+| **Local → Cloud** | Start `python server_gsheets.py` (it creates empty sheets); manually re-enter data or build an upload script |
+| **Sheets + local docs** | Copy the `# API: DOCUMENTS` section from `server.py` into `server_gsheets.py`, replacing the Drive-based document APIs |
 
 ## Project Structure
 
@@ -215,23 +334,30 @@ finance-tracker/
 │   ├── script.js
 │   └── style.css
 ├── config/                  # Configuration & credentials
-│   └── fintrack-*.json      # Google Sheets service account key
+│   ├── gsheets.env.example  # Template — copy to gsheets.env
+│   ├── gsheets.env          # Your settings (gitignored)
+│   ├── client_secret.json   # OAuth2 client secret (gitignored)
+│   ├── drive_token.pickle   # Cached OAuth2 token (gitignored)
+│   └── *.json               # Service account key (gitignored)
 ├── docs/                    # Documentation
 │   ├── ARCHITECTURE.md
-│   └── COMPONENTS.md
+│   ├── COMPONENTS.md
+│   └── GOOGLE_SERVICE_ACCOUNT.md
 ├── server.py                # Flask server (local Excel backend)
-├── server_gsheets.py        # Flask server (Google Sheets backend)
+├── server_gsheets.py        # Flask server (Google Sheets + Drive backend)
+├── sync_drive_to_local.py   # One-way sync: Drive → local
 ├── requirements.txt         # Python dependencies
 ├── start.bat                # One-click launcher (Windows)
 ├── README.md
 ├── .gitignore
-├── data.xlsx                # Auto-generated at runtime
-├── documents/               # Auto-created at runtime
-│   ├── salary_slips/
+├── data.xlsx                # Auto-generated at runtime (gitignored)
+├── documents/               # Auto-created at runtime (gitignored)
+│   ├── salary_slips/        # Default categories
 │   ├── tax/
 │   ├── insurance/
 │   ├── investments/
-│   └── bank_statements/
+│   ├── bank_statements/
+│   └── <your_custom>/       # Create via app's ＋ button
 └── bkp/                     # Backup of earlier versions
 ```
 

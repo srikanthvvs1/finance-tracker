@@ -2000,6 +2000,19 @@ html, body {
   border-color: var(--primary);
 }
 
+.doc-add-btn {
+  border-style: dashed;
+  color: var(--text-secondary);
+  font-size: 15px;
+  min-width: 38px;
+  padding: 8px 12px;
+}
+.doc-add-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: rgba(99, 102, 241, 0.06);
+}
+
 .doc-upload-area {
   margin-bottom: 18px;
 }

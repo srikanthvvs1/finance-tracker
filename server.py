@@ -551,7 +551,7 @@ def index():
 def user_info():
     """Return the OS full display name and current data directory."""
     fullname = None
-    # Try Windows API for display name (e.g. "Srinivas Vaddepu")
+    # Try Windows API for display name (e.g. "John Doe")
     try:
         import ctypes
         GetUserNameExW = ctypes.windll.secur32.GetUserNameExW
@@ -883,15 +883,20 @@ def export_excel():
 # ═══════════════════════════════════════════════════════════════
 
 DOCS_DIR = BASE_DIR / "documents"
-DOC_CATEGORIES = ["salary_slips", "tax", "insurance", "investments", "bank_statements"]
+DEFAULT_DOC_CATEGORIES = ["salary_slips", "tax", "insurance", "investments", "bank_statements"]
 
 import re
 from werkzeug.utils import secure_filename
 
 
+def _valid_category(name):
+    """Check category name is safe (prevents path traversal)."""
+    return bool(re.match(r'^[a-z][a-z0-9_]{0,49}$', name))
+
+
 def _ensure_doc_dirs():
-    """Create documents folder structure if missing."""
-    for cat in DOC_CATEGORIES:
+    """Create default documents folder structure on first run."""
+    for cat in DEFAULT_DOC_CATEGORIES:
         for yr in range(2024, datetime.now().year + 1):
             (DOCS_DIR / cat / str(yr)).mkdir(parents=True, exist_ok=True)
 
@@ -899,7 +904,7 @@ def _ensure_doc_dirs():
 @app.route("/api/documents/<category>/<year>")
 def list_documents(category, year):
     """List all documents in a category/year folder."""
-    if category not in DOC_CATEGORIES:
+    if not _valid_category(category):
         return jsonify({"error": "Invalid category"}), 400
     if not re.match(r'^\d{4}$', year):
         return jsonify({"error": "Invalid year"}), 400
@@ -922,9 +927,8 @@ def list_documents(category, year):
 
 @app.route("/api/documents/<category>/<year>/upload", methods=["POST"])
 def upload_document(category, year):
-    """Upload one or more files to a category/year folder.
-       Files are renamed to: OriginalName_DD_Mon_YYYY.ext"""
-    if category not in DOC_CATEGORIES:
+    """Upload one or more files to a category/year folder."""
+    if not _valid_category(category):
         return jsonify({"error": "Invalid category"}), 400
     if not re.match(r'^\d{4}$', year):
         return jsonify({"error": "Invalid year"}), 400
@@ -936,16 +940,14 @@ def upload_document(category, year):
     for f in request.files.getlist("files"):
         if not f.filename:
             continue
-        orig = secure_filename(f.filename)
-        stem = Path(orig).stem
-        ext = Path(orig).suffix
-        today = datetime.now()
-        new_name = f"{stem}_{today:%d_%b_%Y}{ext}"
+        new_name = secure_filename(f.filename)
+        stem = Path(new_name).stem
+        ext = Path(new_name).suffix
         dest = folder / new_name
         # Avoid overwrite — append counter
         counter = 1
         while dest.exists():
-            new_name = f"{stem}_{today:%d_%b_%Y}_{counter}{ext}"
+            new_name = f"{stem}_{counter}{ext}"
             dest = folder / new_name
             counter += 1
         f.save(str(dest))
@@ -957,7 +959,7 @@ def upload_document(category, year):
 @app.route("/api/documents/<category>/<year>/<filename>")
 def download_document(category, year, filename):
     """Download a specific document."""
-    if category not in DOC_CATEGORIES:
+    if not _valid_category(category):
         return jsonify({"error": "Invalid category"}), 400
     if not re.match(r'^\d{4}$', year):
         return jsonify({"error": "Invalid year"}), 400
@@ -966,13 +968,14 @@ def download_document(category, year, filename):
     file_path = folder / safe_name
     if not file_path.exists() or not file_path.is_file():
         return jsonify({"error": "File not found"}), 404
-    return send_from_directory(str(folder), safe_name, as_attachment=True)
+    return send_from_directory(str(folder), safe_name,
+                               as_attachment=request.args.get("download") is not None)
 
 
 @app.route("/api/documents/<category>/<year>/<filename>", methods=["DELETE"])
 def delete_document(category, year, filename):
     """Delete a specific document."""
-    if category not in DOC_CATEGORIES:
+    if not _valid_category(category):
         return jsonify({"error": "Invalid category"}), 400
     if not re.match(r'^\d{4}$', year):
         return jsonify({"error": "Invalid year"}), 400
@@ -987,15 +990,63 @@ def delete_document(category, year, filename):
 
 @app.route("/api/documents/categories")
 def doc_categories():
-    """Return available categories and years."""
+    """Return available categories and years (discovered from disk)."""
     cats = {}
-    for cat in DOC_CATEGORIES:
-        cat_dir = DOCS_DIR / cat
-        years = []
-        if cat_dir.exists():
-            years = sorted([d.name for d in cat_dir.iterdir() if d.is_dir() and d.name.isdigit()], reverse=True)
-        cats[cat] = years
+    if DOCS_DIR.exists():
+        for d in sorted(DOCS_DIR.iterdir()):
+            if d.is_dir() and not d.name.startswith('.') and _valid_category(d.name):
+                years = sorted([y.name for y in d.iterdir() if y.is_dir() and y.name.isdigit()], reverse=True)
+                cats[d.name] = years
     return jsonify(cats)
+
+
+@app.route("/api/documents/categories", methods=["POST"])
+def create_doc_category():
+    """Create a new document category folder."""
+    data = request.get_json(silent=True) or {}
+    raw = data.get("name", "").strip().lower().replace(" ", "_")
+    raw = re.sub(r'[^a-z0-9_]', '', raw)
+    if not _valid_category(raw):
+        return jsonify({"error": "Invalid name. Use letters, numbers, underscores."}), 400
+    cat_dir = DOCS_DIR / raw
+    if cat_dir.exists():
+        return jsonify({"error": "Category already exists"}), 409
+    (cat_dir / str(datetime.now().year)).mkdir(parents=True, exist_ok=True)
+    return jsonify({"ok": True, "category": raw})
+
+
+@app.route("/api/documents/categories/<category>", methods=["DELETE"])
+def delete_doc_category(category):
+    """Delete an empty document category."""
+    if not _valid_category(category):
+        return jsonify({"error": "Invalid category"}), 400
+    cat_dir = DOCS_DIR / category
+    if not cat_dir.exists():
+        return jsonify({"error": "Category not found"}), 404
+    for root, dirs, files in os.walk(str(cat_dir)):
+        if files:
+            return jsonify({"error": "Category is not empty. Delete all files first."}), 400
+    shutil.rmtree(str(cat_dir))
+    return jsonify({"ok": True, "deleted": category})
+
+
+@app.route("/api/documents/categories/<category>/years", methods=["POST"])
+def create_doc_year(category):
+    """Create a year folder inside a category."""
+    if not _valid_category(category):
+        return jsonify({"error": "Invalid category"}), 400
+    cat_dir = DOCS_DIR / category
+    if not cat_dir.is_dir():
+        return jsonify({"error": "Category not found"}), 404
+    data = request.get_json(silent=True) or {}
+    year = str(data.get("year", "")).strip()
+    if not re.match(r'^\d{4}$', year):
+        return jsonify({"error": "Invalid year"}), 400
+    yr_dir = cat_dir / year
+    if yr_dir.exists():
+        return jsonify({"error": "Year already exists"}), 409
+    yr_dir.mkdir(parents=True, exist_ok=True)
+    return jsonify({"ok": True, "category": category, "year": year})
 
 
 # ═══════════════════════════════════════════════════════════════

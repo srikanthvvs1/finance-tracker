@@ -1,5 +1,8 @@
 documents/
 data.xlsx
-config/
+config/*.json
+config/gsheets.env
+config/drive_token.pickle
+*.up_running
 __pycache__/
 *.pyc

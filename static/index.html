@@ -542,14 +542,8 @@
     <!-- =================== DOCUMENTS SECTION =================== -->
     <section class="content-section" id="section-documents">
 
-      <!-- Category Tabs -->
-      <div class="doc-tabs" id="docTabs">
-        <button class="doc-tab active" data-doc-cat="salary_slips">📄 Salary Slips</button>
-        <button class="doc-tab" data-doc-cat="tax">🧾 Tax</button>
-        <button class="doc-tab" data-doc-cat="insurance">🛡️ Insurance</button>
-        <button class="doc-tab" data-doc-cat="investments">📈 Investments</button>
-        <button class="doc-tab" data-doc-cat="bank_statements">🏦 Bank Statements</button>
-      </div>
+      <!-- Category Tabs (populated dynamically) -->
+      <div class="doc-tabs" id="docTabs"></div>
 
       <!-- Upload Area -->
       <div class="doc-upload-area">
@@ -557,16 +551,12 @@
           <span class="upload-icon">📤</span>
           <p>Drag & drop files here or <label for="docFileInput" class="upload-link">browse</label></p>
           <input type="file" id="docFileInput" multiple hidden />
-          <p class="upload-hint">Files will be saved as: <code>DocumentName_DD_MMM_YYYY.ext</code></p>
+          <p class="upload-hint">Files are saved with their original name</p>
         </div>
       </div>
 
-      <!-- Year Filter -->
-      <div class="doc-year-filter" id="docYearFilter">
-        <button class="doc-year-btn" data-doc-year="2026">2026</button>
-        <button class="doc-year-btn active" data-doc-year="2025">2025</button>
-        <button class="doc-year-btn" data-doc-year="2024">2024</button>
-      </div>
+      <!-- Year Filter (populated dynamically) -->
+      <div class="doc-year-filter" id="docYearFilter"></div>
 
       <!-- Documents List -->
       <div class="table-card full-width">

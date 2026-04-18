@@ -2964,15 +2964,18 @@ function escHtml(str) {
 /* ============================================================
    DOCUMENTS BROWSER
    ============================================================ */
-const DOC_CAT_LABELS = {
-  salary_slips:    '📄 Salary Slips',
-  tax:             '🧾 Tax',
-  insurance:       '🛡️ Insurance',
-  investments:     '📈 Investments',
-  bank_statements: '🏦 Bank Statements',
+const DEFAULT_CAT_ICONS = {
+  salary_slips: '📄', tax: '🧾', insurance: '🛡️',
+  investments: '📈', bank_statements: '🏦',
 };
 
-let docCurrentCat = 'salary_slips';
+function catLabel(key) {
+  const icon = DEFAULT_CAT_ICONS[key] || '📁';
+  const name = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  return `${icon} ${name}`;
+}
+
+let docCurrentCat = null;
 let docCurrentYear = String(new Date().getFullYear());
 
 function formatFileSize(bytes) {
@@ -2984,12 +2987,26 @@ function formatFileSize(bytes) {
 async function renderDocuments() {
   if (!serverAvailable) return;
 
+  // Fetch categories/years if cache is empty, then always render tabs/years
+  if (!Object.keys(docCategoriesCache).length) {
+    await fetchDocCategories();
+  }
+  renderCategoryTabs();
+  renderYearButtons();
+
   const titleEl = document.getElementById('docListTitle');
   const countEl = document.getElementById('docCount');
   const bodyEl  = document.getElementById('docListBody');
   if (!titleEl || !bodyEl) return;
 
-  titleEl.textContent = `${DOC_CAT_LABELS[docCurrentCat]} — ${docCurrentYear}`;
+  if (!docCurrentCat) {
+    titleEl.textContent = 'No categories yet';
+    bodyEl.innerHTML = '<p class="inv-panel-empty">Create a category to get started.</p>';
+    if (countEl) countEl.textContent = '';
+    return;
+  }
+
+  titleEl.textContent = `${catLabel(docCurrentCat)} — ${docCurrentYear}`;
 
   try {
     const files = await apiGet(`/documents/${docCurrentCat}/${docCurrentYear}`);
@@ -3004,17 +3021,21 @@ async function renderDocuments() {
       <table class="data-table">
         <thead><tr><th>File Name</th><th>Size</th><th>Modified</th><th>Actions</th></tr></thead>
         <tbody>
-          ${files.map(f => `
+          ${files.map(f => {
+            const url = `${API_BASE}/documents/${docCurrentCat}/${docCurrentYear}/${encodeURIComponent(f.name)}`;
+            const viewable = /\.(pdf|png|jpe?g|gif|webp|svg|txt|csv)$/i.test(f.name);
+            return `
             <tr>
               <td><strong>${escHtml(f.name)}</strong></td>
               <td>${formatFileSize(f.size)}</td>
               <td>${f.modified}</td>
               <td>
-                <a href="${API_BASE}/documents/${docCurrentCat}/${docCurrentYear}/${encodeURIComponent(f.name)}" class="action-btn" title="Download" download>📥</a>
+                ${viewable ? `<a href="${url}" class="action-btn" title="View" target="_blank">👁️</a>` : ''}
+                <a href="${url}?download" class="action-btn" title="Download" download>📥</a>
                 <button class="action-btn delete doc-delete-btn" title="Delete" data-name="${escHtml(f.name)}">🗑️</button>
               </td>
             </tr>
-          `).join('')}
+          `}).join('')}
         </tbody>
       </table>
     `;
@@ -3034,27 +3055,149 @@ async function renderDocuments() {
   }
 }
 
-function initDocumentEvents() {
-  // Category tabs
-  document.querySelectorAll('.doc-tab').forEach(tab => {
+let docCategoriesCache = {};   // { category: [year, ...] }
+
+async function fetchDocCategories() {
+  if (!serverAvailable) return;
+  try {
+    docCategoriesCache = await apiGet('/documents/categories');
+    // Auto-select first category if current is invalid
+    const cats = Object.keys(docCategoriesCache);
+    if (!docCurrentCat || !cats.includes(docCurrentCat)) {
+      docCurrentCat = cats.length ? cats[0] : null;
+    }
+  } catch (e) { /* ignore */ }
+}
+
+function renderCategoryTabs() {
+  const container = document.getElementById('docTabs');
+  if (!container) return;
+
+  const cats = Object.keys(docCategoriesCache);
+
+  const tabsHtml = cats.map(key =>
+    `<button class="doc-tab${key === docCurrentCat ? ' active' : ''}" data-doc-cat="${key}">${catLabel(key)}</button>`
+  ).join('');
+
+  const addBtn = '<button class="doc-tab doc-add-btn" id="addCategoryBtn" title="Add category">＋</button>';
+
+  container.innerHTML = tabsHtml + addBtn;
+
+  // Tab click handlers
+  container.querySelectorAll('.doc-tab[data-doc-cat]').forEach(tab => {
     tab.addEventListener('click', () => {
-      document.querySelectorAll('.doc-tab').forEach(t => t.classList.remove('active'));
+      container.querySelectorAll('.doc-tab').forEach(t => t.classList.remove('active'));
       tab.classList.add('active');
       docCurrentCat = tab.dataset.docCat;
+      renderYearButtons();
       renderDocuments();
+    });
+    // Right-click to delete
+    tab.addEventListener('contextmenu', e => {
+      e.preventDefault();
+      const cat = tab.dataset.docCat;
+      if (!confirm(`Delete category "${catLabel(cat)}"?\n\nOnly works if the category is empty (no files).`)) return;
+      fetch(`${API_BASE}/documents/categories/${cat}`, { method: 'DELETE' })
+        .then(r => r.json())
+        .then(async data => {
+          if (data.ok) {
+            docCategoriesCache = {};
+            await fetchDocCategories();
+            renderCategoryTabs();
+            renderYearButtons();
+            renderDocuments();
+          } else {
+            alert(data.error || 'Failed to delete category');
+          }
+        })
+        .catch(() => alert('Failed to delete category'));
     });
   });
 
-  // Year filter buttons
-  document.querySelectorAll('.doc-year-btn').forEach(btn => {
+  // Add category button
+  document.getElementById('addCategoryBtn')?.addEventListener('click', async () => {
+    const name = prompt('New category name (e.g. "Medical Records"):');
+    if (!name || !name.trim()) return;
+    try {
+      const res = await fetch(`${API_BASE}/documents/categories`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim() }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        docCurrentCat = data.category;
+        docCategoriesCache = {};
+        await fetchDocCategories();
+        renderCategoryTabs();
+        renderYearButtons();
+        renderDocuments();
+      } else {
+        alert(data.error || 'Failed to create category');
+      }
+    } catch (e) { alert('Failed to create category'); }
+  });
+}
+
+function renderYearButtons() {
+  const container = document.getElementById('docYearFilter');
+  if (!container) return;
+
+  const years = (docCurrentCat && docCategoriesCache[docCurrentCat]) || [];
+  const currentYear = String(new Date().getFullYear());
+
+  // If current selection not in list, default to current year or first available
+  if (years.length && !years.includes(docCurrentYear)) {
+    docCurrentYear = years.includes(currentYear) ? currentYear : years[0];
+  }
+
+  const btnsHtml = years.map(yr =>
+    `<button class="doc-year-btn${yr === docCurrentYear ? ' active' : ''}" data-doc-year="${yr}">${yr}</button>`
+  ).join('');
+
+  const addBtn = docCurrentCat
+    ? '<button class="doc-year-btn doc-add-btn" id="addYearBtn" title="Add year">＋</button>'
+    : '';
+
+  container.innerHTML = btnsHtml + addBtn;
+
+  container.querySelectorAll('.doc-year-btn[data-doc-year]').forEach(btn => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.doc-year-btn').forEach(b => b.classList.remove('active'));
+      container.querySelectorAll('.doc-year-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       docCurrentYear = btn.dataset.docYear;
       renderDocuments();
     });
   });
 
+  // Add year button
+  document.getElementById('addYearBtn')?.addEventListener('click', async () => {
+    const year = prompt('Year to add (e.g. 2023):', String(new Date().getFullYear()));
+    if (!year || !/^\d{4}$/.test(year.trim())) {
+      if (year !== null) alert('Please enter a valid 4-digit year.');
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/documents/categories/${docCurrentCat}/years`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ year: year.trim() }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        docCurrentYear = year.trim();
+        docCategoriesCache = {};
+        await fetchDocCategories();
+        renderYearButtons();
+        renderDocuments();
+      } else {
+        alert(data.error || 'Failed to create year folder');
+      }
+    } catch (e) { alert('Failed to create year folder'); }
+  });
+}
+
+function initDocumentEvents() {
   // File upload — drag & drop
   const dropZone = document.getElementById('docDropZone');
   const fileInput = document.getElementById('docFileInput');
@@ -3090,6 +3233,8 @@ async function uploadFiles(fileList) {
     const data = await res.json();
     if (data.ok) {
       console.log(`✅ Uploaded ${data.count} file(s):`, data.uploaded);
+      await fetchDocCategories();
+      renderYearButtons();
       renderDocuments();
     }
   } catch (e) {
