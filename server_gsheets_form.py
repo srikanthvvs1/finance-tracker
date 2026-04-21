@@ -1,12 +1,13 @@
 """
-FinTrack Local Server  (Google Sheets backend)
-───────────────────────────────────────────────
+FinTrack Local Server  (Google Sheets backend + Google Form expense sync)
+─────────────────────────────────────────────────────────────────────────
 A lightweight Flask server that:
   1. Serves the static front-end (index.html, script.js, style.css)
   2. Persists all data to a Google Sheet via gspread
   3. Proxies live price requests to Yahoo Finance & mfapi.in (no CORS issues)
+  4. Syncs expenses submitted via Google Form (FormExpenses → Expenses)
 
-Run:  python server.py
+Run:  python server_gsheets_form.py
 Open: http://localhost:5000
 """
 
@@ -14,6 +15,7 @@ import os
 import sys
 import threading
 import time
+import hashlib
 from datetime import date, datetime
 from pathlib import Path
 
@@ -73,9 +75,13 @@ def _get_spreadsheet():
     with _gs_lock:
         if _sh is not None:
             return _sh
+        print("    Loading credentials...")
         creds = Credentials.from_service_account_file(str(CREDS_FILE), scopes=SCOPES)
+        print("    Authorizing gspread...")
         _gc = gspread.authorize(creds)
+        print("    Opening spreadsheet...")
         _sh = _gc.open_by_key(SPREADSHEET_ID)
+        print("    Connected!")
         return _sh
 
 
@@ -101,6 +107,15 @@ _NUMERIC = {"id", "investmentId", "amount", "units", "buyPrice", "currentPrice",
             "price", "target", "current", "income", "expenses", "invested",
             "emergency", "net_saved"}
 _INT_COLS = {"id", "investmentId"}
+
+# ─── FormExpenses column definitions ────────────────────────────
+# Google Form auto-fills: Timestamp, Expense Date, Amount, Category, Description, PaymentMode
+FORM_SHEET_NAME = "FormExpenses"
+
+# Valid categories and payment modes (for validation / normalisation)
+_VALID_CATEGORIES = {"food", "grocery", "travel", "housing", "health",
+                     "entertainment", "utilities", "shopping", "other"}
+_VALID_PAYMENTS = {"card", "debit", "cash", "transfer", "upi"}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -188,6 +203,244 @@ def _write_sheets(sheet_data):
 
 
 # ═══════════════════════════════════════════════════════════════
+#  FORM EXPENSE SYNC
+# ═══════════════════════════════════════════════════════════════
+
+_sync_lock = threading.Lock()
+_last_sync_result = {"synced": 0, "errors": [], "timestamp": None}
+
+
+def _ensure_form_sheet():
+    """Create the FormExpenses worksheet if it doesn't exist.
+    Note: If using Google Form, the form auto-creates this sheet.
+    This is a fallback for manual setup."""
+    sh = _get_spreadsheet()
+    existing = [ws.title for ws in sh.worksheets()]
+    if FORM_SHEET_NAME not in existing:
+        form_cols = ["Timestamp", "Expense Date", "Amount", "Category", "Description", "PaymentMode"]
+        sh.add_worksheet(title=FORM_SHEET_NAME, rows=200, cols=len(form_cols))
+        ws = sh.worksheet(FORM_SHEET_NAME)
+        ws.update(range_name="A1", values=[form_cols])
+        print(f"  [+] Created worksheet: {FORM_SHEET_NAME}")
+
+
+def _normalise_category(raw):
+    """Normalise a category string from the form to match app categories."""
+    if not raw:
+        return "other"
+    cleaned = str(raw).strip().lower().replace(" ", "_")
+    if cleaned in _VALID_CATEGORIES:
+        return cleaned
+    # Fuzzy match common form labels
+    _aliases = {
+        "food & dining": "food", "dining": "food",
+        "groceries": "grocery", "grocery": "grocery", "vegetables": "grocery",
+        "transport": "travel", "transportation": "travel", "cab": "travel",
+        "rent": "housing", "home": "housing",
+        "medical": "health", "medicine": "health", "pharmacy": "health",
+        "bills": "utilities", "electricity": "utilities", "internet": "utilities",
+        "movies": "entertainment", "games": "entertainment",
+        "clothes": "shopping", "amazon": "shopping",
+    }
+    return _aliases.get(cleaned, "other")
+
+
+def _normalise_payment(raw):
+    """Normalise a payment mode string from the form."""
+    if not raw:
+        return "card"
+    cleaned = str(raw).strip().lower().replace(" ", "_")
+    if cleaned in _VALID_PAYMENTS:
+        return cleaned
+    _aliases = {
+        "credit card": "card", "credit": "card", "cc": "card",
+        "debit card": "debit", "dc": "debit",
+        "bank transfer": "transfer", "neft": "transfer", "imps": "transfer",
+        "google pay": "upi", "gpay": "upi", "phonepe": "upi", "paytm": "upi",
+    }
+    return _aliases.get(cleaned, "card")
+
+
+def _normalise_date(raw):
+    """Parse various date formats from the form into YYYY-MM-DD."""
+    if not raw:
+        return date.today().isoformat()
+    s = str(raw).strip()
+    # Try common formats
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y",
+                "%Y/%m/%d", "%d %b %Y", "%d %B %Y"):
+        try:
+            return datetime.strptime(s, fmt).date().isoformat()
+        except ValueError:
+            continue
+    # If it's a Google Sheets timestamp like "4/21/2026 14:30:00"
+    for fmt in ("%m/%d/%Y %H:%M:%S", "%d/%m/%Y %H:%M:%S",
+                "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(s, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return date.today().isoformat()
+
+
+def _generate_record_id(timestamp, amount, description):
+    """Generate a stable hash to detect duplicates."""
+    raw = f"{timestamp}|{amount}|{description}"
+    return hashlib.md5(raw.encode()).hexdigest()[:12]
+
+
+def _sync_form_expenses():
+    """
+    Read all rows from FormExpenses, append new ones to Expenses,
+    then clear FormExpenses (keep header).  Returns (synced_count, errors).
+
+    Flow:
+      1. Read all FormExpenses rows (1 API call)
+      2. If empty → return (total: 1 call)
+      3. Read Expenses to get max ID + build duplicate hashes (1 API call)
+      4. Transform + deduplicate (in-memory)
+      5. Append new expenses to Expenses sheet (1 API call)
+      6. Clear FormExpenses data rows, keep header (1 API call, background)
+    Total: 4 API calls max.  FormExpenses stays near-empty forever.
+
+    Safety:
+      - If step 5 succeeds but step 6 fails → next sync re-reads same rows
+        → duplicate hash check skips them → no double-counting
+      - If step 5 fails → step 6 never runs → rows are still in FormExpenses
+    """
+    with _sync_lock:
+        global _last_sync_result
+        errors = []
+
+        try:
+            ws_form = _ws(FORM_SHEET_NAME)
+
+            # ── 1. Read all FormExpenses rows (1 API call) ───────
+            all_rows = ws_form.get_all_values()
+            if len(all_rows) <= 1:
+                _last_sync_result = {"synced": 0, "errors": [], "timestamp": datetime.now().isoformat()}
+                return 0, []
+
+            header = all_rows[0]
+            col_idx = {}
+            for i, h in enumerate(header):
+                col_idx[h.strip()] = i
+
+            data_rows = []  # (row_number_1based, entry_dict)
+            for row_num, row in enumerate(all_rows[1:], start=2):
+                entry = {}
+                for col_name, idx in col_idx.items():
+                    entry[col_name] = row[idx] if idx < len(row) else ""
+                data_rows.append((row_num, entry))
+
+            if not data_rows:
+                _last_sync_result = {"synced": 0, "errors": [], "timestamp": datetime.now().isoformat()}
+                return 0, []
+
+            print(f"  [SYNC] Found {len(data_rows)} form row(s) to process")
+
+            # ── 2. Read Expenses to get max ID + duplicate hashes (1 API call)
+            existing_expenses = _read_sheet("Expenses", EXPENSE_COLS)
+            max_id = 0
+            existing_hashes = set()
+            for e in existing_expenses:
+                eid = int(e["id"]) if e["id"] else 0
+                if eid > max_id:
+                    max_id = eid
+                h = _generate_record_id(
+                    str(e.get("date", "")),
+                    str(e.get("amount", "")),
+                    str(e.get("description", ""))
+                )
+                existing_hashes.add(h)
+
+            # ── 3. Transform + deduplicate (in-memory) ───────────
+            new_expenses = []
+            now_iso = datetime.now().isoformat()
+
+            for row_num, entry in data_rows:
+                try:
+                    amount_raw = entry.get("Amount", "0")
+                    amount = float(str(amount_raw).replace(",", "")) if amount_raw else 0
+                    if amount <= 0:
+                        errors.append(f"Row {row_num}: invalid amount '{amount_raw}'")
+                        continue
+
+                    expense_date = _normalise_date(
+                        entry.get("Expense Date") or entry.get("ExpenseDate")
+                        or entry.get("Timestamp", "")
+                    )
+                    description = str(entry.get("Description", "")).strip() or "Form entry"
+                    category = _normalise_category(entry.get("Category", ""))
+                    payment = _normalise_payment(entry.get("PaymentMode", ""))
+
+                    # Duplicate check
+                    rec_hash = _generate_record_id(expense_date, str(amount), description)
+                    if rec_hash in existing_hashes:
+                        errors.append(f"Row {row_num}: duplicate — skipped")
+                        continue
+                    existing_hashes.add(rec_hash)
+
+                    max_id += 1
+                    new_expenses.append({
+                        "id": max_id,
+                        "date": expense_date,
+                        "description": description,
+                        "category": category,
+                        "payment": payment,
+                        "amount": amount,
+                    })
+
+                except Exception as ex:
+                    errors.append(f"Row {row_num}: {str(ex)}")
+
+            # ── 4. Append to Expenses sheet (1 API call) ─────────
+            if new_expenses:
+                ws_exp = _ws("Expenses")
+                append_rows = []
+                for obj in new_expenses:
+                    append_rows.append([
+                        obj["id"], obj["date"], obj["description"],
+                        obj["category"], obj["payment"], obj["amount"],
+                    ])
+                ws_exp.append_rows(append_rows, value_input_option="USER_ENTERED")
+
+            # ── 5. Clear FormExpenses (keep header) ──────────────
+            # Only clear after successful append (or if all were duplicates)
+            if len(all_rows) > 1:
+                ws_form.delete_rows(2, len(all_rows))
+
+            synced = len(new_expenses)
+            _last_sync_result = {
+                "synced": synced,
+                "errors": errors,
+                "timestamp": now_iso,
+            }
+
+            if synced > 0:
+                print(f"  [SYNC] ✅ Imported {synced} expense(s) from Google Form")
+            if errors:
+                for err in errors:
+                    print(f"  [SYNC] ⚠  {err}")
+
+            return synced, errors
+
+        except Exception as ex:
+            err_msg = f"Form sync failed: {str(ex)}"
+            print(f"  [SYNC] ❌ {err_msg}")
+            _last_sync_result = {"synced": 0, "errors": [err_msg], "timestamp": datetime.now().isoformat()}
+            return 0, [err_msg]
+
+
+def _background_sync():
+    """Run form sync in a background thread (non-blocking startup)."""
+    try:
+        _sync_form_expenses()
+    except Exception as ex:
+        print(f"  [SYNC] ❌ Background sync error: {ex}")
+
+
+# ═══════════════════════════════════════════════════════════════
 #  SEED DATA  (only if sheets are empty)
 # ═══════════════════════════════════════════════════════════════
 
@@ -240,7 +493,7 @@ def _seed_all_data():
     # ── Expenses ────────────────────────────────────────────────
     seed_expenses = [
         [101, "2025-05-01", "Monthly Rent",       "housing",       "transfer", 22000],
-        [102, "2025-05-05", "Groceries",          "grocery",       "upi",      4500],
+        [102, "2025-05-05", "Groceries",          "food",          "upi",      4500],
         [103, "2025-05-10", "Electricity Bill",    "utilities",     "transfer", 1400],
         [104, "2025-05-15", "Dining Out",          "food",          "card",     2100],
         [105, "2025-05-20", "Uber Rides",          "travel",        "upi",      1200],
@@ -250,7 +503,7 @@ def _seed_all_data():
         [109, "2025-05-30", "Internet + Phone",    "utilities",     "transfer", 1500],
 
         [201, "2025-06-01", "Monthly Rent",       "housing",       "transfer", 22000],
-        [202, "2025-06-05", "Groceries",          "grocery",       "upi",      4200],
+        [202, "2025-06-05", "Groceries",          "food",          "upi",      4200],
         [203, "2025-06-12", "Electricity Bill",    "utilities",     "transfer", 1350],
         [204, "2025-06-18", "Restaurant",          "food",          "card",     1800],
         [205, "2025-06-22", "Travel Tickets",      "travel",        "card",     3200],
@@ -259,7 +512,7 @@ def _seed_all_data():
         [208, "2025-06-30", "Utilities",           "utilities",     "transfer", 1500],
 
         [301, "2025-07-01", "Monthly Rent",       "housing",       "transfer", 22000],
-        [302, "2025-07-06", "Groceries",          "grocery",       "upi",      5200],
+        [302, "2025-07-06", "Groceries",          "food",          "upi",      5200],
         [303, "2025-07-10", "Electricity Bill",    "utilities",     "transfer", 1800],
         [304, "2025-07-15", "Swiggy Orders",       "food",          "upi",      2800],
         [305, "2025-07-20", "Weekend Trip",         "travel",        "card",     5500],
@@ -268,7 +521,7 @@ def _seed_all_data():
         [308, "2025-07-30", "Utilities + Phone",   "utilities",     "transfer", 1500],
 
         [401, "2025-08-01", "Monthly Rent",       "housing",       "transfer", 22000],
-        [402, "2025-08-05", "Groceries",          "grocery",       "upi",      4800],
+        [402, "2025-08-05", "Groceries",          "food",          "upi",      4800],
         [403, "2025-08-10", "Electricity Bill",    "utilities",     "transfer", 1500],
         [404, "2025-08-16", "Dining + Food",       "food",          "card",     2400],
         [405, "2025-08-22", "Cab Rides",           "travel",        "upi",      1800],
@@ -277,7 +530,7 @@ def _seed_all_data():
         [408, "2025-08-30", "Internet + Phone",    "utilities",     "transfer", 1500],
 
         [501, "2025-09-01", "Monthly Rent",       "housing",       "transfer", 22000],
-        [502, "2025-09-04", "Groceries",          "grocery",       "upi",      4000],
+        [502, "2025-09-04", "Groceries",          "food",          "upi",      4000],
         [503, "2025-09-10", "Electricity Bill",    "utilities",     "transfer", 1300],
         [504, "2025-09-14", "Restaurant Bills",    "food",          "card",     1600],
         [505, "2025-09-20", "Train Tickets",       "travel",        "card",     2100],
@@ -286,7 +539,7 @@ def _seed_all_data():
         [508, "2025-09-30", "Utilities",           "utilities",     "transfer", 1500],
 
         [601, "2025-10-01", "Monthly Rent",       "housing",       "transfer", 23000],
-        [602, "2025-10-05", "Groceries",          "grocery",       "upi",      4600],
+        [602, "2025-10-05", "Groceries",          "food",          "upi",      4600],
         [603, "2025-10-10", "Electricity Bill",    "utilities",     "transfer", 1400],
         [604, "2025-10-15", "Diwali Shopping",     "shopping",      "card",     8000],
         [605, "2025-10-20", "Food Orders",         "food",          "upi",      2200],
@@ -294,7 +547,7 @@ def _seed_all_data():
         [607, "2025-10-30", "Utilities",           "utilities",     "transfer", 1500],
 
         [701, "2025-11-01", "Monthly Rent",       "housing",       "transfer", 23000],
-        [702, "2025-11-05", "Groceries",          "grocery",       "upi",      5000],
+        [702, "2025-11-05", "Groceries",          "food",          "upi",      5000],
         [703, "2025-11-10", "Electricity Bill",    "utilities",     "transfer", 1600],
         [704, "2025-11-15", "Restaurant",          "food",          "card",     2500],
         [705, "2025-11-20", "Flight Tickets",      "travel",        "card",     6500],
@@ -303,7 +556,7 @@ def _seed_all_data():
         [708, "2025-11-30", "Utilities",           "utilities",     "transfer", 1500],
 
         [801, "2025-12-01", "Monthly Rent",       "housing",       "transfer", 23000],
-        [802, "2025-12-05", "Groceries",          "grocery",       "upi",      5500],
+        [802, "2025-12-05", "Groceries",          "food",          "upi",      5500],
         [803, "2025-12-10", "Electricity Bill",    "utilities",     "transfer", 1500],
         [804, "2025-12-15", "Christmas Dinner",    "food",          "card",     3000],
         [805, "2025-12-20", "New Year Trip",       "travel",        "card",     8000],
@@ -313,7 +566,7 @@ def _seed_all_data():
         [809, "2025-12-30", "Utilities",           "utilities",     "transfer", 1500],
 
         [901, "2026-01-01", "Monthly Rent",       "housing",       "transfer", 25000],
-        [902, "2026-01-05", "Groceries",          "grocery",       "upi",      4800],
+        [902, "2026-01-05", "Groceries",          "food",          "upi",      4800],
         [903, "2026-01-10", "Electricity Bill",    "utilities",     "transfer", 1400],
         [904, "2026-01-15", "Dining Out",          "food",          "card",     1800],
         [905, "2026-01-20", "Metro Pass",          "travel",        "upi",      1200],
@@ -322,7 +575,7 @@ def _seed_all_data():
         [908, "2026-01-30", "Utilities",           "utilities",     "transfer", 1500],
 
         [1001, "2026-02-01", "Monthly Rent",      "housing",       "transfer", 25000],
-        [1002, "2026-02-05", "Groceries",         "grocery",       "upi",      4200],
+        [1002, "2026-02-05", "Groceries",         "food",          "upi",      4200],
         [1003, "2026-02-10", "Electricity Bill",   "utilities",     "transfer", 1300],
         [1004, "2026-02-14", "Valentine Dinner",   "food",          "card",     2500],
         [1005, "2026-02-20", "Uber Rides",         "travel",        "upi",      900],
@@ -330,7 +583,7 @@ def _seed_all_data():
         [1007, "2026-02-28", "Utilities",          "utilities",     "transfer", 1500],
 
         [1101, "2026-03-01", "Monthly Rent",      "housing",       "transfer", 25000],
-        [1102, "2026-03-05", "Groceries",         "grocery",       "upi",      4500],
+        [1102, "2026-03-05", "Groceries",         "food",          "upi",      4500],
         [1103, "2026-03-10", "Electricity Bill",   "utilities",     "transfer", 1500],
         [1104, "2026-03-15", "Holi Party",         "food",          "card",     2000],
         [1105, "2026-03-20", "Train Tickets",      "travel",        "card",     1800],
@@ -340,7 +593,7 @@ def _seed_all_data():
 
         # Current month — April 2026
         [1,  "2026-04-01", "Monthly Rent",          "housing",       "transfer", 25000],
-        [2,  "2026-04-02", "Grocery - BigBasket",   "grocery",       "upi",      3200],
+        [2,  "2026-04-02", "Grocery - BigBasket",   "food",          "upi",      3200],
         [3,  "2026-04-03", "Swiggy - Dinner",       "food",          "upi",      450],
         [4,  "2026-04-04", "Train Ticket - Mumbai",  "travel",       "card",     1850],
         [5,  "2026-04-05", "Netflix + Spotify",      "entertainment","card",     499],
@@ -552,6 +805,27 @@ def save_expenses():
         return jsonify({"error": "Expected array"}), 400
     _write_sheet("Expenses", EXPENSE_COLS, data)
     return jsonify({"ok": True, "count": len(data)})
+
+
+# ═══════════════════════════════════════════════════════════════
+#  API: FORM EXPENSE SYNC
+# ═══════════════════════════════════════════════════════════════
+
+@app.route("/api/sync-form-expenses", methods=["POST"])
+def api_sync_form_expenses():
+    """Trigger form expense sync and return the result."""
+    synced, errors = _sync_form_expenses()
+    return jsonify({
+        "synced": synced,
+        "errors": errors,
+        "timestamp": _last_sync_result.get("timestamp"),
+    })
+
+
+@app.route("/api/sync-form-expenses", methods=["GET"])
+def api_sync_status():
+    """Return the result of the last sync (from background or manual)."""
+    return jsonify(_last_sync_result)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1265,7 +1539,7 @@ def create_doc_year(category):
 import atexit as _atexit
 import signal as _signal
 
-_UP_FILE = BASE_DIR / "server_gsheets.up_running"
+_UP_FILE = BASE_DIR / "server_gsheets_form.up_running"
 
 def _create_up_file():
     _UP_FILE.write_text(str(os.getpid()))
@@ -1345,15 +1619,31 @@ if __name__ == "__main__":
         _kill_server()
         raise SystemExit(0)
 
-    _check_already_running()
-    print("\n  Connecting to Google Sheets...")
-    _ensure_worksheets()
-    print("  Setting up Google Drive folders...")
-    _move_spreadsheet_to_finance()
-    _ensure_drive_folders()
-    _fetch_categories()  # pre-warm cache
-    port = int(os.environ.get("PORT", 5000))
-    debug = os.environ.get("FLASK_DEBUG", "true").lower() in ("1", "true", "yes")
-    _create_up_file()
-    print(f"\n  FinTrack server running at http://localhost:{port}\n")
+    # Flask debug reloader spawns a child process — skip PID check and
+    # heavy init for the reloader child (WERKZEUG_RUN_MAIN is set in child)
+    _is_reloader_child = os.environ.get("WERKZEUG_RUN_MAIN") == "true"
+
+    if not _is_reloader_child:
+        _check_already_running()
+        print("\n  Connecting to Google Sheets...")
+        _ensure_worksheets()
+        _ensure_form_sheet()
+        print("  Setting up Google Drive folders...")
+        _move_spreadsheet_to_finance()
+        _ensure_drive_folders()
+        _fetch_categories()  # pre-warm cache
+        port = int(os.environ.get("PORT", 5000))
+        debug = os.environ.get("FLASK_DEBUG", "true").lower() in ("1", "true", "yes")
+        _create_up_file()
+
+        # Start form sync in background thread (non-blocking)
+        print("  Syncing form expenses in background...")
+        sync_thread = threading.Thread(target=_background_sync, daemon=True)
+        sync_thread.start()
+
+        print(f"\n  FinTrack server running at http://localhost:{port}\n")
+    else:
+        port = int(os.environ.get("PORT", 5000))
+        debug = os.environ.get("FLASK_DEBUG", "true").lower() in ("1", "true", "yes")
+
     app.run(host="0.0.0.0", port=port, debug=debug)

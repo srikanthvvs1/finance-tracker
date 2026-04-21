@@ -63,12 +63,52 @@ function saveSavingsHistory() { if (serverAvailable) apiPost('/savings-history',
 function saveSavingsGoals()   { if (serverAvailable) apiPost('/savings-goals', savingsGoals).catch(e => console.error('Save goals failed:', e)); }
 function saveEmergencyFund()  { if (serverAvailable) apiPost('/emergency-fund', { target: emergencyFund.target, contributions: emergencyFund.contributions }).catch(e => console.error('Save emergency fund failed:', e)); }
 
+/* ── Sync form expenses (Google Form → main Expenses sheet) ── */
+async function syncFormExpenses() {
+  try {
+    const res = await apiPost('/sync-form-expenses', {});
+    if (res.synced > 0) {
+      console.log(`📋 Synced ${res.synced} expense(s) from Google Form`);
+      // Re-fetch expenses and re-render affected sections
+      expenses = await apiGet('/expenses');
+      renderExpensesTable();
+      renderRecentTransactions();
+      renderDashboardCards();
+      renderSavingsCards();
+      renderSavingsTable();
+      if (typeof updateMonthDisplay === 'function') updateMonthDisplay();
+      // Show toast notification
+      showSyncToast(res.synced);
+    }
+    if (res.errors && res.errors.length > 0) {
+      console.warn('Form sync warnings:', res.errors);
+    }
+  } catch (e) {
+    // Silently ignore — server might not have FormExpenses sheet yet
+    console.debug('Form sync skipped:', e.message);
+  }
+}
+
+function showSyncToast(count) {
+  let toast = document.getElementById('syncToast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'syncToast';
+    toast.style.cssText = 'position:fixed;bottom:24px;right:24px;background:#0f172a;color:#fff;padding:12px 20px;border-radius:10px;font-size:0.9rem;z-index:9999;opacity:0;transition:opacity 0.3s;box-shadow:0 4px 12px rgba(0,0,0,0.3);';
+    document.body.appendChild(toast);
+  }
+  toast.textContent = `📋 Synced ${count} expense${count > 1 ? 's' : ''} from Google Form`;
+  toast.style.opacity = '1';
+  setTimeout(() => { toast.style.opacity = '0'; }, 4000);
+}
+
 
 /* ============================================================
    CATEGORY CONFIGURATION
    ============================================================ */
 const categoryConfig = {
   food:          { label: 'Food',          icon: '🍔', cls: 'cat-food'          },
+  grocery:       { label: 'Grocery',       icon: '🛒', cls: 'cat-grocery'       },
   travel:        { label: 'Travel',        icon: '✈️',  cls: 'cat-travel'        },
   housing:       { label: 'Housing',       icon: '🏠', cls: 'cat-housing'       },
   health:        { label: 'Health',        icon: '⚕️',  cls: 'cat-health'        },
@@ -430,6 +470,13 @@ function openInvestmentModal(filter) {
 function closeModal(id) {
   document.getElementById(id)?.classList.remove('open');
   document.getElementById(id)?.querySelector('form')?.reset();
+  /* Reset expense modal edit state */
+  if (id === 'expenseModal') {
+    _editingExpenseId = null;
+    const modal = document.getElementById('expenseModal');
+    modal.querySelector('.modal-header h2').textContent = 'Add Expense';
+    modal.querySelector('button[type="submit"]').textContent = 'Add Expense';
+  }
   /* Reset investment modal dynamic state */
   if (id === 'investmentModal') {
     const dyn = document.getElementById('invDynamicFields');
@@ -627,8 +674,34 @@ function updateExpenseSummaryStrip(filtered) {
   }
 }
 
-// Event delegation — delete expense rows
+// Track expense being edited (null = add mode)
+let _editingExpenseId = null;
+
+function openExpenseModalForEdit(id) {
+  const exp = expenses.find(x => x.id === id);
+  if (!exp) return;
+  _editingExpenseId = id;
+  const form = document.getElementById('expenseForm');
+  form.date.value        = exp.date;
+  form.amount.value      = exp.amount;
+  form.description.value = exp.description;
+  form.category.value    = exp.category;
+  form.payment.value     = exp.payment || 'upi';
+  if (form.notes) form.notes.value = exp.notes || '';
+  // Update modal title & button
+  const modal = document.getElementById('expenseModal');
+  modal.querySelector('.modal-header h2').textContent = 'Edit Expense';
+  modal.querySelector('button[type="submit"]').textContent = 'Save Changes';
+  openModal('expenseModal');
+}
+
+// Event delegation — edit / delete expense rows
 document.getElementById('expensesTableBody')?.addEventListener('click', e => {
+  const editBtn = e.target.closest('.action-btn.edit');
+  if (editBtn) {
+    openExpenseModalForEdit(parseInt(editBtn.dataset.id));
+    return;
+  }
   const btn = e.target.closest('.action-btn.delete');
   if (!btn) return;
   const id = parseInt(btn.dataset.id);
@@ -2861,14 +2934,27 @@ document.getElementById('nextMonth')?.addEventListener('click', () => {
 document.getElementById('expenseForm')?.addEventListener('submit', e => {
   e.preventDefault();
   const form = e.target;
-  expenses.push({
-    id:          Date.now(),
-    date:        form.date.value,
-    description: form.description.value.trim(),
-    category:    form.category.value,
-    payment:     form.payment.value,
-    amount:      parseFloat(form.amount.value),
-  });
+  if (_editingExpenseId != null) {
+    // Edit mode — update existing expense
+    const exp = expenses.find(x => x.id === _editingExpenseId);
+    if (exp) {
+      exp.date        = form.date.value;
+      exp.description = form.description.value.trim();
+      exp.category    = form.category.value;
+      exp.payment     = form.payment.value;
+      exp.amount      = parseFloat(form.amount.value);
+    }
+  } else {
+    // Add mode — create new expense
+    expenses.push({
+      id:          Date.now(),
+      date:        form.date.value,
+      description: form.description.value.trim(),
+      category:    form.category.value,
+      payment:     form.payment.value,
+      amount:      parseFloat(form.amount.value),
+    });
+  }
   saveExpenses();
   refreshDashboard();
   closeModal('expenseModal');
@@ -3301,4 +3387,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Month display
   updateMonthDisplay();
+
+  // Sync form expenses in background (non-blocking)
+  if (serverAvailable) {
+    syncFormExpenses();
+  }
 });

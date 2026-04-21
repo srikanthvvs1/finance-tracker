@@ -155,7 +155,7 @@ def _ensure_workbook():
     seed_expenses = [
         # Historical months (representative monthly expenses)
         [101, date(2025,5,1),  "Monthly Rent",       "housing",       "transfer", 22000.00],
-        [102, date(2025,5,5),  "Groceries",          "food",          "upi",      4500.00],
+        [102, date(2025,5,5),  "Groceries",          "grocery",       "upi",      4500.00],
         [103, date(2025,5,10), "Electricity Bill",    "utilities",     "transfer", 1400.00],
         [104, date(2025,5,15), "Dining Out",          "food",          "card",     2100.00],
         [105, date(2025,5,20), "Uber Rides",          "travel",        "upi",      1200.00],
@@ -165,7 +165,7 @@ def _ensure_workbook():
         [109, date(2025,5,30), "Internet + Phone",    "utilities",     "transfer", 1500.00],
 
         [201, date(2025,6,1),  "Monthly Rent",       "housing",       "transfer", 22000.00],
-        [202, date(2025,6,5),  "Groceries",          "food",          "upi",      4200.00],
+        [202, date(2025,6,5),  "Groceries",          "grocery",       "upi",      4200.00],
         [203, date(2025,6,12), "Electricity Bill",    "utilities",     "transfer", 1350.00],
         [204, date(2025,6,18), "Restaurant",          "food",          "card",     1800.00],
         [205, date(2025,6,22), "Travel Tickets",      "travel",        "card",     3200.00],
@@ -174,7 +174,7 @@ def _ensure_workbook():
         [208, date(2025,6,30), "Utilities",           "utilities",     "transfer", 1500.00],
 
         [301, date(2025,7,1),  "Monthly Rent",       "housing",       "transfer", 22000.00],
-        [302, date(2025,7,6),  "Groceries",          "food",          "upi",      5200.00],
+        [302, date(2025,7,6),  "Groceries",          "grocery",       "upi",      5200.00],
         [303, date(2025,7,10), "Electricity Bill",    "utilities",     "transfer", 1800.00],
         [304, date(2025,7,15), "Swiggy Orders",       "food",          "upi",      2800.00],
         [305, date(2025,7,20), "Weekend Trip",         "travel",        "card",     5500.00],
@@ -183,7 +183,7 @@ def _ensure_workbook():
         [308, date(2025,7,30), "Utilities + Phone",   "utilities",     "transfer", 1500.00],
 
         [401, date(2025,8,1),  "Monthly Rent",       "housing",       "transfer", 22000.00],
-        [402, date(2025,8,5),  "Groceries",          "food",          "upi",      4800.00],
+        [402, date(2025,8,5),  "Groceries",          "grocery",       "upi",      4800.00],
         [403, date(2025,8,10), "Electricity Bill",    "utilities",     "transfer", 1500.00],
         [404, date(2025,8,16), "Dining + Food",       "food",          "card",     2400.00],
         [405, date(2025,8,22), "Cab Rides",           "travel",        "upi",      1800.00],
@@ -192,7 +192,7 @@ def _ensure_workbook():
         [408, date(2025,8,30), "Internet + Phone",    "utilities",     "transfer", 1500.00],
 
         [501, date(2025,9,1),  "Monthly Rent",       "housing",       "transfer", 22000.00],
-        [502, date(2025,9,4),  "Groceries",          "food",          "upi",      4000.00],
+        [502, date(2025,9,4),  "Groceries",          "grocery",       "upi",      4000.00],
         [503, date(2025,9,10), "Electricity Bill",    "utilities",     "transfer", 1300.00],
         [504, date(2025,9,14), "Restaurant Bills",    "food",          "card",     1600.00],
         [505, date(2025,9,20), "Train Tickets",       "travel",        "card",     2100.00],
@@ -201,7 +201,7 @@ def _ensure_workbook():
         [508, date(2025,9,30), "Utilities",           "utilities",     "transfer", 1500.00],
 
         [601, date(2025,10,1),  "Monthly Rent",      "housing",       "transfer", 23000.00],
-        [602, date(2025,10,5),  "Groceries",         "food",          "upi",      4600.00],
+        [602, date(2025,10,5),  "Groceries",         "grocery",       "upi",      4600.00],
         [603, date(2025,10,10), "Electricity Bill",   "utilities",     "transfer", 1400.00],
         [604, date(2025,10,15), "Diwali Shopping",    "shopping",      "card",     8000.00],
         [605, date(2025,10,20), "Food Orders",        "food",          "upi",      2200.00],
@@ -209,7 +209,7 @@ def _ensure_workbook():
         [607, date(2025,10,30), "Utilities",          "utilities",     "transfer", 1500.00],
 
         [701, date(2025,11,1),  "Monthly Rent",      "housing",       "transfer", 23000.00],
-        [702, date(2025,11,5),  "Groceries",         "food",          "upi",      5000.00],
+        [702, date(2025,11,5),  "Groceries",         "grocery",       "upi",      5000.00],
         [703, date(2025,11,10), "Electricity Bill",   "utilities",     "transfer", 1600.00],
         [704, date(2025,11,15), "Restaurant",         "food",          "card",     2500.00],
         [705, date(2025,11,20), "Flight Tickets",     "travel",        "card",     6500.00],
@@ -218,7 +218,7 @@ def _ensure_workbook():
         [708, date(2025,11,30), "Utilities",          "utilities",     "transfer", 1500.00],
 
         [801, date(2025,12,1),  "Monthly Rent",      "housing",       "transfer", 23000.00],
-        [802, date(2025,12,5),  "Groceries",         "food",          "upi",      5500.00],
+        [802, date(2025,12,5),  "Groceries",         "grocery",       "upi",      5500.00],
         [803, date(2025,12,10), "Electricity Bill",   "utilities",     "transfer", 1500.00],
         [804, date(2025,12,15), "Christmas Dinner",   "food",          "card",     3000.00],
         [805, date(2025,12,20), "New Year Trip",      "travel",        "card",     8000.00],
@@ -228,7 +228,7 @@ def _ensure_workbook():
         [809, date(2025,12,30), "Utilities",          "utilities",     "transfer", 1500.00],
 
         [901, date(2026,1,1),  "Monthly Rent",       "housing",       "transfer", 25000.00],
-        [902, date(2026,1,5),  "Groceries",          "food",          "upi",      4800.00],
+        [902, date(2026,1,5),  "Groceries",          "grocery",       "upi",      4800.00],
         [903, date(2026,1,10), "Electricity Bill",    "utilities",     "transfer", 1400.00],
         [904, date(2026,1,15), "Dining Out",          "food",          "card",     1800.00],
         [905, date(2026,1,20), "Metro Pass",          "travel",        "upi",      1200.00],
@@ -237,7 +237,7 @@ def _ensure_workbook():
         [908, date(2026,1,30), "Utilities",           "utilities",     "transfer", 1500.00],
 
         [1001, date(2026,2,1),  "Monthly Rent",      "housing",       "transfer", 25000.00],
-        [1002, date(2026,2,5),  "Groceries",         "food",          "upi",      4200.00],
+        [1002, date(2026,2,5),  "Groceries",         "grocery",       "upi",      4200.00],
         [1003, date(2026,2,10), "Electricity Bill",   "utilities",     "transfer", 1300.00],
         [1004, date(2026,2,14), "Valentine Dinner",   "food",          "card",     2500.00],
         [1005, date(2026,2,20), "Uber Rides",         "travel",        "upi",      900.00],
@@ -245,7 +245,7 @@ def _ensure_workbook():
         [1007, date(2026,2,28), "Utilities",          "utilities",     "transfer", 1500.00],
 
         [1101, date(2026,3,1),  "Monthly Rent",      "housing",       "transfer", 25000.00],
-        [1102, date(2026,3,5),  "Groceries",         "food",          "upi",      4500.00],
+        [1102, date(2026,3,5),  "Groceries",         "grocery",       "upi",      4500.00],
         [1103, date(2026,3,10), "Electricity Bill",   "utilities",     "transfer", 1500.00],
         [1104, date(2026,3,15), "Holi Party",         "food",          "card",     2000.00],
         [1105, date(2026,3,20), "Train Tickets",      "travel",        "card",     1800.00],
@@ -255,7 +255,7 @@ def _ensure_workbook():
 
         # Current month — April 2026
         [1,  date(2026,4,1),  "Monthly Rent",          "housing",       "transfer", 25000.00],
-        [2,  date(2026,4,2),  "Grocery – BigBasket",   "food",          "upi",      3200.00],
+        [2,  date(2026,4,2),  "Grocery – BigBasket",   "grocery",       "upi",      3200.00],
         [3,  date(2026,4,3),  "Swiggy – Dinner",       "food",          "upi",      450.00],
         [4,  date(2026,4,4),  "Train Ticket – Mumbai",  "travel",       "card",     1850.00],
         [5,  date(2026,4,5),  "Netflix + Spotify",      "entertainment","card",     499.00],
