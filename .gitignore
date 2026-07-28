@@ -1,5 +1,6 @@
 documents/
 data.xlsx
+backups/
 config/*.json
 config/gsheets.env
 config/drive_token.pickle

@@ -5,13 +5,15 @@ A lightweight Flask server that:
   1. Serves the static front-end (index.html, script.js, style.css)
   2. Persists all data to an Excel file (data.xlsx) via openpyxl
   3. Proxies live price requests to Yahoo Finance & mfapi.in (no CORS issues)
+  4. Imports new expense entries from a Google Sheets inbox at startup
 
 Run:  python server.py
 Open: http://localhost:5000
 """
 
-import json
+import hashlib
 import os
+import re
 import shutil
 import tempfile
 import threading
@@ -20,47 +22,127 @@ from datetime import date, datetime
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
-from flask_cors import CORS
 import openpyxl
 import requests
+import gspread
+from google.oauth2.service_account import Credentials
 
 # ─── Config (override via environment variables) ────────────────────
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get("FINTRACK_DATA_DIR", str(BASE_DIR)))
 DATA_FILE = DATA_DIR / "data.xlsx"
+BACKUP_DIR = DATA_DIR / "backups"
+BACKUP_KEEP = max(3, int(os.environ.get("FINTRACK_BACKUP_KEEP", "20")))
 _file_lock = threading.Lock()
+
+CONFIG_DIR = BASE_DIR / "config"
+_env_file = CONFIG_DIR / "gsheets.env"
+if _env_file.exists():
+    for line in _env_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip())
+
+GSHEETS_CREDS_FILE = CONFIG_DIR / os.environ.get("GSHEETS_CREDS_FILE", "credentials.json")
+GSHEETS_SPREADSHEET_ID = os.environ.get("GSHEETS_SPREADSHEET_ID", "")
+FORM_SHEET_NAME = "FormExpenses"
+GSHEETS_SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+]
+_sync_lock = threading.Lock()
+_last_sync_result = {"synced": 0, "errors": [], "timestamp": None}
 
 STATIC_DIR = BASE_DIR / "static"
 app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="")
-CORS(app)
 
 
 # ═══════════════════════════════════════════════════════════════
 #  EXCEL HELPERS  (atomic writes via temp-file + rename)
 # ═══════════════════════════════════════════════════════════════
 
-EXPENSE_COLS = ["id", "date", "description", "category", "payment", "amount"]
+EXPENSE_COLS = ["id", "date", "description", "category", "payment", "amount", "accountId"]
 INVESTMENT_COLS = [
     "id", "asset", "name", "category", "units", "buyPrice",
     "currentPrice", "date", "marketCap", "riskLevel", "ticker", "schemeCode",
 ]
-TRANSACTION_COLS = ["investmentId", "date", "action", "units", "price"]
-SAVINGS_HIST_COLS = ["month", "income", "expenses", "invested", "emergency", "net_saved"]
+TRANSACTION_COLS = ["investmentId", "date", "action", "units", "price", "accountId"]
+SAVINGS_HIST_COLS = [
+    "month", "income", "expenses", "invested", "emergency", "net_saved", "accountId",
+]
 SAVINGS_GOAL_COLS = ["id", "name", "icon", "target", "current", "deadline"]
 EMERGENCY_COLS = ["target"]
 EMERGENCY_CONTRIB_COLS = ["id", "date", "amount", "note"]
+BUDGET_COLS = ["month", "category", "amount"]
+RECURRING_BILL_COLS = [
+    "id", "name", "category", "amount", "dueDay", "frequency", "active",
+    "includedInBudget",
+]
+NET_WORTH_COLS = [
+    "month", "cash", "bank", "investments", "retirement", "otherAssets",
+    "loans", "creditCards", "otherLiabilities",
+]
+CASH_FLOW_COLS = ["month", "openingBalance", "otherIncome", "safetyBalance"]
+ACCOUNT_COLS = [
+    "id", "name", "bank", "purpose", "openingBalance", "statementBalance",
+    "includeNetWorth", "active",
+]
+TRANSFER_COLS = ["id", "date", "fromAccountId", "toAccountId", "amount", "note"]
+
+PLANNING_SHEETS = {
+    "Budgets": BUDGET_COLS,
+    "RecurringBills": RECURRING_BILL_COLS,
+    "NetWorth": NET_WORTH_COLS,
+    "CashFlow": CASH_FLOW_COLS,
+    "Accounts": ACCOUNT_COLS,
+    "Transfers": TRANSFER_COLS,
+}
 
 
-def _safe_delete(path, retries=5):
-    """Delete a file with retries (handles OneDrive / antivirus locks)."""
-    for i in range(retries):
-        try:
-            path.unlink(missing_ok=True)
-            return
-        except PermissionError:
-            time.sleep(0.3 * (i + 1))
-    # Last resort
-    path.unlink(missing_ok=True)
+def _ensure_planning_sheets(wb):
+    """Add newly introduced planning sheets without touching existing user data."""
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+
+    changed = False
+    for sheet_name, columns in PLANNING_SHEETS.items():
+        if sheet_name in wb.sheetnames:
+            continue
+        ws = wb.create_sheet(sheet_name)
+        ws.append(columns)
+        for cell in ws[1]:
+            cell.font = Font(name="Calibri", bold=True, size=11, color="FFFFFF")
+            cell.fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = Border(
+                left=Side(style="thin"), right=Side(style="thin"),
+                top=Side(style="thin"), bottom=Side(style="thin"),
+            )
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = ws.dimensions
+        changed = True
+    return changed
+
+
+def _migrate_sheet_schema(wb, sheet_name, columns):
+    """Reorder/add known columns without discarding existing rows."""
+    if sheet_name not in wb.sheetnames:
+        return False
+    ws = wb[sheet_name]
+    existing = [cell.value for cell in ws[1]]
+    if existing == columns:
+        return False
+    positions = {str(name): index for index, name in enumerate(existing) if name}
+    values = list(ws.iter_rows(min_row=2, values_only=True))
+    migrated = [
+        [row[positions[col]] if col in positions and positions[col] < len(row) else None
+         for col in columns]
+        for row in values
+    ]
+    ws.delete_rows(1, ws.max_row)
+    ws.append(columns)
+    for row in migrated:
+        ws.append(row)
+    return True
 
 
 def _safe_save(wb):
@@ -87,35 +169,56 @@ def _safe_save(wb):
         raise
 
 
+def _backup_workbook():
+    """Create a timestamped rolling backup before modifying data.xlsx."""
+    if not DATA_FILE.exists():
+        return None
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    destination = BACKUP_DIR / f"data_{stamp}.xlsx"
+    shutil.copy2(DATA_FILE, destination)
+    backups = sorted(BACKUP_DIR.glob("data_*.xlsx"), key=lambda path: path.stat().st_mtime)
+    for old_backup in backups[:-BACKUP_KEEP]:
+        old_backup.unlink(missing_ok=True)
+    return destination
+
+
 def _ensure_workbook():
-    """Create the Excel file with headers, formatting, and seed data if it doesn't exist."""
+    """Create an empty Excel file with formatted sheets if it does not exist."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
     if DATA_FILE.exists():
         try:
             wb = _open_workbook(retries=8, delay=1.0)
-            # Check schema — recreate if SavingsHistory columns changed
-            if "SavingsHistory" in wb.sheetnames:
-                ws = wb["SavingsHistory"]
-                headers = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
-                if headers != SAVINGS_HIST_COLS:
-                    wb.close()
-                    print("[!] SavingsHistory schema changed -- recreating...")
-                    _safe_delete(DATA_FILE)
-                else:
-                    wb.close()
-                    return  # file is valid
+            # Upgrade known sheets in place; never delete user data for a schema change.
+            changed = _ensure_planning_sheets(wb)
+            schemas = {
+                "Expenses": EXPENSE_COLS,
+                "Investments": INVESTMENT_COLS,
+                "Transactions": TRANSACTION_COLS,
+                "SavingsGoals": SAVINGS_GOAL_COLS,
+                "EmergencyFund": EMERGENCY_COLS,
+                "EFContributions": EMERGENCY_CONTRIB_COLS,
+                "SavingsHistory": SAVINGS_HIST_COLS,
+                **PLANNING_SHEETS,
+            }
+            for sheet_name, columns in schemas.items():
+                changed = _migrate_sheet_schema(wb, sheet_name, columns) or changed
+            if changed:
+                _backup_workbook()
+                _safe_save(wb)
+                print("[OK] Migrated workbook schema without deleting existing data")
             else:
                 wb.close()
+            return
         except PermissionError:
-            print("[!] data.xlsx locked by another process -- waiting...")
-            time.sleep(3)
-            try:
-                _safe_delete(DATA_FILE)
-            except PermissionError:
-                print("[!] Still locked. Please close Excel/OneDrive and retry.")
-                return
-        except Exception:
-            print("[!] data.xlsx is corrupted -- recreating...")
-            _safe_delete(DATA_FILE)
+            print("[!] data.xlsx is locked. Close Excel/OneDrive and restart FinTrack.")
+            return
+        except Exception as exc:
+            BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            quarantined = BACKUP_DIR / f"data_unreadable_{stamp}.xlsx"
+            shutil.move(str(DATA_FILE), str(quarantined))
+            print(f"[!] Workbook could not be opened ({exc}). Preserved it as {quarantined.name}.")
 
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
@@ -129,10 +232,6 @@ def _ensure_workbook():
         left=Side(style="thin"), right=Side(style="thin"),
         top=Side(style="thin"), bottom=Side(style="thin"),
     )
-    data_font = Font(name="Calibri", size=10)
-    num_fmt_currency = '#,##0.00'
-    num_fmt_int = '#,##0'
-
     def _create_sheet(name, cols, widths=None):
         ws = wb.create_sheet(name)
         ws.append(cols)
@@ -149,290 +248,23 @@ def _ensure_workbook():
         ws.auto_filter.ref = ws.dimensions
         return ws
 
-    # ── Expenses Sheet ──────────────────────────────────────────
-    ws_exp = _create_sheet("Expenses", EXPENSE_COLS,
-                           widths=[12, 14, 35, 16, 14, 14])
-    seed_expenses = [
-        # Historical months (representative monthly expenses)
-        [101, date(2025,5,1),  "Monthly Rent",       "housing",       "transfer", 22000.00],
-        [102, date(2025,5,5),  "Groceries",          "grocery",       "upi",      4500.00],
-        [103, date(2025,5,10), "Electricity Bill",    "utilities",     "transfer", 1400.00],
-        [104, date(2025,5,15), "Dining Out",          "food",          "card",     2100.00],
-        [105, date(2025,5,20), "Uber Rides",          "travel",        "upi",      1200.00],
-        [106, date(2025,5,25), "Amazon Shopping",     "shopping",      "card",     3800.00],
-        [107, date(2025,5,28), "Gym + Pharmacy",      "health",        "upi",      2000.00],
-        [108, date(2025,5,30), "Netflix + Spotify",   "entertainment", "card",     499.00],
-        [109, date(2025,5,30), "Internet + Phone",    "utilities",     "transfer", 1500.00],
-
-        [201, date(2025,6,1),  "Monthly Rent",       "housing",       "transfer", 22000.00],
-        [202, date(2025,6,5),  "Groceries",          "grocery",       "upi",      4200.00],
-        [203, date(2025,6,12), "Electricity Bill",    "utilities",     "transfer", 1350.00],
-        [204, date(2025,6,18), "Restaurant",          "food",          "card",     1800.00],
-        [205, date(2025,6,22), "Travel Tickets",      "travel",        "card",     3200.00],
-        [206, date(2025,6,28), "Health Checkup",      "health",        "upi",      2500.00],
-        [207, date(2025,6,30), "Subscriptions",       "entertainment", "card",     499.00],
-        [208, date(2025,6,30), "Utilities",           "utilities",     "transfer", 1500.00],
-
-        [301, date(2025,7,1),  "Monthly Rent",       "housing",       "transfer", 22000.00],
-        [302, date(2025,7,6),  "Groceries",          "grocery",       "upi",      5200.00],
-        [303, date(2025,7,10), "Electricity Bill",    "utilities",     "transfer", 1800.00],
-        [304, date(2025,7,15), "Swiggy Orders",       "food",          "upi",      2800.00],
-        [305, date(2025,7,20), "Weekend Trip",         "travel",        "card",     5500.00],
-        [306, date(2025,7,25), "Clothes Shopping",     "shopping",      "card",     4200.00],
-        [307, date(2025,7,30), "Subscriptions",       "entertainment", "card",     499.00],
-        [308, date(2025,7,30), "Utilities + Phone",   "utilities",     "transfer", 1500.00],
-
-        [401, date(2025,8,1),  "Monthly Rent",       "housing",       "transfer", 22000.00],
-        [402, date(2025,8,5),  "Groceries",          "grocery",       "upi",      4800.00],
-        [403, date(2025,8,10), "Electricity Bill",    "utilities",     "transfer", 1500.00],
-        [404, date(2025,8,16), "Dining + Food",       "food",          "card",     2400.00],
-        [405, date(2025,8,22), "Cab Rides",           "travel",        "upi",      1800.00],
-        [406, date(2025,8,28), "Pharmacy",            "health",        "upi",      1200.00],
-        [407, date(2025,8,30), "Subscriptions",       "entertainment", "card",     499.00],
-        [408, date(2025,8,30), "Internet + Phone",    "utilities",     "transfer", 1500.00],
-
-        [501, date(2025,9,1),  "Monthly Rent",       "housing",       "transfer", 22000.00],
-        [502, date(2025,9,4),  "Groceries",          "grocery",       "upi",      4000.00],
-        [503, date(2025,9,10), "Electricity Bill",    "utilities",     "transfer", 1300.00],
-        [504, date(2025,9,14), "Restaurant Bills",    "food",          "card",     1600.00],
-        [505, date(2025,9,20), "Train Tickets",       "travel",        "card",     2100.00],
-        [506, date(2025,9,26), "Gym Membership",      "health",        "transfer", 1500.00],
-        [507, date(2025,9,30), "Subscriptions",       "entertainment", "card",     499.00],
-        [508, date(2025,9,30), "Utilities",           "utilities",     "transfer", 1500.00],
-
-        [601, date(2025,10,1),  "Monthly Rent",      "housing",       "transfer", 23000.00],
-        [602, date(2025,10,5),  "Groceries",         "grocery",       "upi",      4600.00],
-        [603, date(2025,10,10), "Electricity Bill",   "utilities",     "transfer", 1400.00],
-        [604, date(2025,10,15), "Diwali Shopping",    "shopping",      "card",     8000.00],
-        [605, date(2025,10,20), "Food Orders",        "food",          "upi",      2200.00],
-        [606, date(2025,10,30), "Subscriptions",      "entertainment", "card",     499.00],
-        [607, date(2025,10,30), "Utilities",          "utilities",     "transfer", 1500.00],
-
-        [701, date(2025,11,1),  "Monthly Rent",      "housing",       "transfer", 23000.00],
-        [702, date(2025,11,5),  "Groceries",         "grocery",       "upi",      5000.00],
-        [703, date(2025,11,10), "Electricity Bill",   "utilities",     "transfer", 1600.00],
-        [704, date(2025,11,15), "Restaurant",         "food",          "card",     2500.00],
-        [705, date(2025,11,20), "Flight Tickets",     "travel",        "card",     6500.00],
-        [706, date(2025,11,25), "Winter Clothes",     "shopping",      "card",     3500.00],
-        [707, date(2025,11,30), "Subscriptions",      "entertainment", "card",     499.00],
-        [708, date(2025,11,30), "Utilities",          "utilities",     "transfer", 1500.00],
-
-        [801, date(2025,12,1),  "Monthly Rent",      "housing",       "transfer", 23000.00],
-        [802, date(2025,12,5),  "Groceries",         "grocery",       "upi",      5500.00],
-        [803, date(2025,12,10), "Electricity Bill",   "utilities",     "transfer", 1500.00],
-        [804, date(2025,12,15), "Christmas Dinner",   "food",          "card",     3000.00],
-        [805, date(2025,12,20), "New Year Trip",      "travel",        "card",     8000.00],
-        [806, date(2025,12,25), "Gifts Shopping",     "shopping",      "card",     5000.00],
-        [807, date(2025,12,28), "Health Checkup",     "health",        "upi",      3000.00],
-        [808, date(2025,12,30), "Subscriptions",      "entertainment", "card",     499.00],
-        [809, date(2025,12,30), "Utilities",          "utilities",     "transfer", 1500.00],
-
-        [901, date(2026,1,1),  "Monthly Rent",       "housing",       "transfer", 25000.00],
-        [902, date(2026,1,5),  "Groceries",          "grocery",       "upi",      4800.00],
-        [903, date(2026,1,10), "Electricity Bill",    "utilities",     "transfer", 1400.00],
-        [904, date(2026,1,15), "Dining Out",          "food",          "card",     1800.00],
-        [905, date(2026,1,20), "Metro Pass",          "travel",        "upi",      1200.00],
-        [906, date(2026,1,28), "Pharmacy",            "health",        "upi",      1300.00],
-        [907, date(2026,1,30), "Subscriptions",       "entertainment", "card",     499.00],
-        [908, date(2026,1,30), "Utilities",           "utilities",     "transfer", 1500.00],
-
-        [1001, date(2026,2,1),  "Monthly Rent",      "housing",       "transfer", 25000.00],
-        [1002, date(2026,2,5),  "Groceries",         "grocery",       "upi",      4200.00],
-        [1003, date(2026,2,10), "Electricity Bill",   "utilities",     "transfer", 1300.00],
-        [1004, date(2026,2,14), "Valentine Dinner",   "food",          "card",     2500.00],
-        [1005, date(2026,2,20), "Uber Rides",         "travel",        "upi",      900.00],
-        [1006, date(2026,2,28), "Subscriptions",      "entertainment", "card",     499.00],
-        [1007, date(2026,2,28), "Utilities",          "utilities",     "transfer", 1500.00],
-
-        [1101, date(2026,3,1),  "Monthly Rent",      "housing",       "transfer", 25000.00],
-        [1102, date(2026,3,5),  "Groceries",         "grocery",       "upi",      4500.00],
-        [1103, date(2026,3,10), "Electricity Bill",   "utilities",     "transfer", 1500.00],
-        [1104, date(2026,3,15), "Holi Party",         "food",          "card",     2000.00],
-        [1105, date(2026,3,20), "Train Tickets",      "travel",        "card",     1800.00],
-        [1106, date(2026,3,25), "Gym Renewal",        "health",        "transfer", 1500.00],
-        [1107, date(2026,3,30), "Subscriptions",      "entertainment", "card",     499.00],
-        [1108, date(2026,3,30), "Utilities",          "utilities",     "transfer", 1500.00],
-
-        # Current month — April 2026
-        [1,  date(2026,4,1),  "Monthly Rent",          "housing",       "transfer", 25000.00],
-        [2,  date(2026,4,2),  "Grocery – BigBasket",   "grocery",       "upi",      3200.00],
-        [3,  date(2026,4,3),  "Swiggy – Dinner",       "food",          "upi",      450.00],
-        [4,  date(2026,4,4),  "Train Ticket – Mumbai",  "travel",       "card",     1850.00],
-        [5,  date(2026,4,5),  "Netflix + Spotify",      "entertainment","card",     499.00],
-        [6,  date(2026,4,6),  "Apollo Pharmacy",        "health",       "upi",      780.00],
-        [7,  date(2026,4,7),  "Electricity Bill",       "utilities",    "transfer", 1650.00],
-        [8,  date(2026,4,8),  "Team Lunch",             "food",         "card",     1200.00],
-        [9,  date(2026,4,9),  "Amazon – Headphones",    "shopping",     "card",     2499.00],
-        [10, date(2026,4,10), "Uber Rides",             "travel",       "upi",      680.00],
-        [11, date(2026,4,11), "Phone Bill – Airtel",    "utilities",    "transfer", 599.00],
-        [12, date(2026,4,12), "Dinner – Restaurant",    "food",         "card",     1550.00],
-        [13, date(2026,4,13), "Internet Bill – ACT",    "utilities",    "transfer", 999.00],
-        [14, date(2026,4,14), "Gym Membership",         "health",       "transfer", 1500.00],
-        [15, date(2026,4,15), "Zara – Clothes",         "shopping",     "card",     3800.00],
-    ]
-    for row in seed_expenses:
-        ws_exp.append(row)
-    for r in range(2, len(seed_expenses) + 2):
-        ws_exp.cell(row=r, column=2).number_format = DATE_FMT
-        ws_exp.cell(row=r, column=6).number_format = num_fmt_currency
-
-    # ── Investments Sheet ───────────────────────────────────────
-    ws_inv = _create_sheet("Investments", INVESTMENT_COLS,
-                           widths=[14, 14, 28, 18, 12, 16, 16, 14, 12, 12, 16, 14])
-    seed_investments = [
-        [1,  "RELIANCE",  "Reliance Industries",       "stocks",        50,  2450.00, 2850.00, date(2025,6,15), "large",  "moderate", "RELIANCE.NS",  None],
-        [2,  "TCS",       "Tata Consultancy Services",  "stocks",        30,  3400.00, 3780.00, date(2025,7,20), "large",  "low",      "TCS.NS",       None],
-        [3,  "INFY",      "Infosys Ltd",               "stocks",        40,  1500.00, 1620.00, date(2025,8,10), "large",  "low",      "INFY.NS",      None],
-        [4,  "HDFCBANK",  "HDFC Bank Ltd",             "stocks",        25,  1650.00, 1740.00, date(2025,9,5),  "large",  "low",      "HDFCBANK.NS",  None],
-        [5,  "BAJFINANCE","Bajaj Finance Ltd",         "stocks",        15,  6800.00, 7250.00, date(2025,5,1),  "large",  "high",     "BAJFINANCE.NS",None],
-        [6,  "AAPL",      "Apple Inc.",                "foreign_stocks",10,  14500.00,18900.00,date(2025,6,15), "large",  "moderate", "AAPL",         None],
-        [7,  "MSFT",      "Microsoft Corp.",           "foreign_stocks", 8,  28000.00,32500.00,date(2025,8,10), "large",  "low",      "MSFT",         None],
-        [8,  "HDFC-MF",   "HDFC Mid-Cap Opp Fund",    "mutual_funds",  200, 105.00,  128.50,  date(2025,3,1),  "mid",    "moderate", None,           "118989"],
-        [9,  "PARAG-MF",  "Parag Parikh Flexi Cap",   "mutual_funds",  150, 55.00,   68.40,   date(2025,5,20), "large",  "moderate", None,           "122639"],
-        [10, "AXIS-MF",   "Axis Small Cap Fund",      "mutual_funds",  300, 72.00,   84.20,   date(2025,4,10), "small",  "high",     None,           "125354"],
-        [11, "GOLD-SGB",  "Sovereign Gold Bond 2025",  "gold",          10,  5800.00, 7200.00, date(2025,1,10), None,     None,       None,           None],
-        [12, "GOLD-PHY",  "Physical Gold 24K",         "gold",          20,  6100.00, 7200.00, date(2024,11,20),None,     None,       None,           None],
-        [13, "PPF-SBI",   "PPF – State Bank",          "ppf",           1,   150000,  168750,  date(2024,4,1),  None,     None,       None,           None],
-        [14, "NPS-TIER1", "NPS Tier-1 Equity",         "nps",           500, 42.00,   52.60,   date(2024,4,1),  None,     None,       None,           None],
-        [15, "FD-SBI",    "SBI FD 3yr @7.1%",          "fixed_deposit", 1,   300000,  321300,  date(2025,1,15), None,     None,       None,           None],
-        [16, "FD-HDFC",   "HDFC FD 2yr @7.0%",        "fixed_deposit", 1,   200000,  214000,  date(2025,6,1),  None,     None,       None,           None],
-    ]
-    for row in seed_investments:
-        ws_inv.append(row)
-    for r in range(2, len(seed_investments) + 2):
-        ws_inv.cell(row=r, column=5).number_format = num_fmt_int
-        ws_inv.cell(row=r, column=6).number_format = num_fmt_currency
-        ws_inv.cell(row=r, column=7).number_format = num_fmt_currency
-        ws_inv.cell(row=r, column=8).number_format = DATE_FMT
-
-    # ── Transactions Sheet ──────────────────────────────────────
-    ws_txn = _create_sheet("Transactions", TRANSACTION_COLS,
-                           widths=[14, 14, 10, 12, 16])
-    seed_transactions = [
-        # Stocks
-        [1,  date(2025,6,15), "BUY",  30, 2400.00],
-        [1,  date(2025,9,10), "BUY",  30, 2500.00],
-        [1,  date(2026,1,5),  "SELL", 10, 2700.00],
-        [2,  date(2025,7,20), "BUY",  30, 3400.00],
-        [3,  date(2025,8,10), "BUY",  40, 1500.00],
-        [4,  date(2025,9,5),  "BUY",  25, 1650.00],
-        [5,  date(2025,5,1),  "BUY",  20, 6500.00],
-        [5,  date(2025,11,15),"SELL",  5, 7100.00],
-        # Foreign Stocks
-        [6,  date(2025,6,15), "BUY",  10, 14500.00],
-        [7,  date(2025,8,10), "BUY",   8, 28000.00],
-        # Mutual Funds
-        [8,  date(2025,3,1),  "BUY", 100, 100.00],
-        [8,  date(2025,7,15), "BUY", 100, 110.00],
-        [9,  date(2025,5,20), "BUY", 150,  55.00],
-        [10, date(2025,4,10), "BUY", 300,  72.00],
-        # Gold
-        [11, date(2025,1,10), "BUY",  10, 5800.00],
-        [12, date(2024,11,20),"BUY",  20, 6100.00],
-        # PPF, NPS, FD
-        [13, date(2024,4,1),  "BUY",   1, 150000],
-        [14, date(2024,4,1),  "BUY", 500,  42.00],
-        [15, date(2025,1,15), "BUY",   1, 300000],
-        [16, date(2025,6,1),  "BUY",   1, 200000],
-    ]
-    for row in seed_transactions:
-        ws_txn.append(row)
-    for r in range(2, len(seed_transactions) + 2):
-        ws_txn.cell(row=r, column=2).number_format = DATE_FMT
-        ws_txn.cell(row=r, column=4).number_format = num_fmt_int
-        ws_txn.cell(row=r, column=5).number_format = num_fmt_currency
-
-    # ── Savings Goals Sheet ─────────────────────────────────────
-    ws_sg = _create_sheet("SavingsGoals", SAVINGS_GOAL_COLS,
-                          widths=[12, 24, 8, 16, 16, 14])
-    seed_goals = [
-        [1, "Emergency Fund",     "🏥", 500000, 350000, date(2026,12,31)],
-        [2, "Vacation – Japan",   "✈️",  300000, 180000, date(2026,9,1)],
-        [3, "New Laptop",         "💻", 150000, 150000, date(2026,6,1)],
-        [4, "Home Down Payment",  "🏠", 2500000, 650000, date(2028,12,31)],
-        [5, "Wedding Fund",       "💍", 1500000, 420000, date(2027,6,1)],
-    ]
-    for row in seed_goals:
-        ws_sg.append(row)
-    for r in range(2, len(seed_goals) + 2):
-        ws_sg.cell(row=r, column=4).number_format = num_fmt_currency
-        ws_sg.cell(row=r, column=5).number_format = num_fmt_currency
-        ws_sg.cell(row=r, column=6).number_format = DATE_FMT
-
-    # ── Emergency Fund Sheet (target only, row 1 = header, row 2 = target value) ──
-    ws_ef = _create_sheet("EmergencyFund", EMERGENCY_COLS,
-                          widths=[16])
-    ws_ef.append([500000])
-    ws_ef.cell(row=2, column=1).number_format = num_fmt_currency
-
-    # ── Emergency Fund Contributions Sheet ──────────────────────
-    ws_efc = _create_sheet("EFContributions", EMERGENCY_CONTRIB_COLS,
-                           widths=[12, 14, 16, 30])
-    seed_ef_contribs = [
-        [1, date(2025, 5, 5),  25000, "Initial deposit"],
-        [2, date(2025, 6, 5),  25000, "Monthly contribution"],
-        [3, date(2025, 7, 5),  30000, "Monthly contribution"],
-        [4, date(2025, 8, 5),  25000, "Monthly contribution"],
-        [5, date(2025, 9, 5),  25000, "Monthly contribution"],
-        [6, date(2025, 10, 5), 30000, "Monthly contribution"],
-        [7, date(2025, 11, 5), 25000, "Monthly contribution"],
-        [8, date(2025, 12, 5), 30000, "Bonus month extra"],
-        [9, date(2026, 1, 5),  25000, "Monthly contribution"],
-        [10, date(2026, 2, 5), 35000, "Tax refund added"],
-        [11, date(2026, 3, 5), 50000, "Salary hike bump"],
-        [12, date(2026, 4, 5), 25000, "Monthly contribution"],
-    ]
-    for row in seed_ef_contribs:
-        ws_efc.append(row)
-    for r in range(2, len(seed_ef_contribs) + 2):
-        ws_efc.cell(row=r, column=2).number_format = DATE_FMT
-        ws_efc.cell(row=r, column=3).number_format = num_fmt_currency
-
-    # ── Savings History Sheet (computed from other sheets' seed data) ──
-    ws_sh = _create_sheet("SavingsHistory", SAVINGS_HIST_COLS,
-                          widths=[14, 16, 16, 16, 16, 16])
-
-    # Pre-compute per-month expenses from seed_expenses
-    _exp_by_month = {}
-    for row in seed_expenses:
-        d = row[1]  # date object
-        key = f"{d:%b %Y}"  # e.g. "May 2025"
-        _exp_by_month[key] = _exp_by_month.get(key, 0) + row[5]
-
-    # Pre-compute per-month investment outflows from seed_transactions (BUY only)
-    _inv_by_month = {}
-    for row in seed_transactions:
-        if row[2] == "BUY":
-            d = row[1]
-            key = f"{d:%b %Y}"
-            _inv_by_month[key] = _inv_by_month.get(key, 0) + (row[3] * row[4])  # units * price
-
-    # Pre-compute per-month EF contributions from seed_ef_contribs
-    _ef_by_month = {}
-    for row in seed_ef_contribs:
-        d = row[1]
-        key = f"{d:%b %Y}"
-        _ef_by_month[key] = _ef_by_month.get(key, 0) + row[2]
-
-    seed_incomes = {
-        "May 2025": 85000, "Jun 2025": 85000, "Jul 2025": 87000,
-        "Aug 2025": 87000, "Sep 2025": 87000, "Oct 2025": 90000,
-        "Nov 2025": 90000, "Dec 2025": 90000, "Jan 2026": 90000,
-        "Feb 2026": 92000, "Mar 2026": 92000, "Apr 2026": 95000,
-    }
-    for label, income in seed_incomes.items():
-        exp = _exp_by_month.get(label, 0)
-        inv = _inv_by_month.get(label, 0)
-        ef  = _ef_by_month.get(label, 0)
-        net = income - exp - inv - ef
-        ws_sh.append([label, income, exp, inv, ef, net])
-    for r in range(2, len(seed_incomes) + 2):
-        for c in range(2, 7):  # columns B-F
-            ws_sh.cell(row=r, column=c).number_format = num_fmt_currency
+    # Create empty, formatted sheets. User data is added through the app or expense sync.
+    _create_sheet("Expenses", EXPENSE_COLS, widths=[12, 14, 35, 16, 14, 14])
+    _create_sheet("Investments", INVESTMENT_COLS, widths=[14, 14, 28, 18, 12, 16, 16, 14, 12, 12, 16, 14])
+    _create_sheet("Transactions", TRANSACTION_COLS, widths=[14, 14, 10, 12, 16])
+    _create_sheet("SavingsGoals", SAVINGS_GOAL_COLS, widths=[12, 24, 8, 16, 16, 14])
+    _create_sheet("EmergencyFund", EMERGENCY_COLS, widths=[16])
+    _create_sheet("EFContributions", EMERGENCY_CONTRIB_COLS, widths=[12, 14, 16, 30])
+    _create_sheet("SavingsHistory", SAVINGS_HIST_COLS, widths=[14, 16, 16, 16, 16, 16])
+    _create_sheet("Budgets", BUDGET_COLS, widths=[14, 18, 16])
+    _create_sheet("RecurringBills", RECURRING_BILL_COLS, widths=[12, 28, 18, 16, 12, 14, 12])
+    _create_sheet("NetWorth", NET_WORTH_COLS, widths=[14, 16, 16, 16, 16, 16, 16, 16, 18])
+    _create_sheet("CashFlow", CASH_FLOW_COLS, widths=[14, 18, 16, 18])
+    _create_sheet("Accounts", ACCOUNT_COLS, widths=[12, 24, 18, 18, 18, 18, 18, 12])
+    _create_sheet("Transfers", TRANSFER_COLS, widths=[12, 14, 18, 18, 16, 30])
 
     _safe_save(wb)
-    print("[OK] Created data.xlsx with seed data (6 sheets)")
-
+    print("[OK] Created empty data.xlsx workbook")
 
 # Columns that hold date values (written as Excel dates, read back as ISO strings)
 DATE_COLUMNS = {"date", "deadline"}
@@ -493,6 +325,7 @@ def _read_sheet(sheet_name, columns):
 def _write_sheet(sheet_name, columns, rows):
     """Overwrite a single sheet."""
     with _file_lock:
+        _backup_workbook()
         wb = _open_workbook()
         ws = wb[sheet_name]
         ws.delete_rows(2, ws.max_row)
@@ -515,6 +348,7 @@ def _write_sheet(sheet_name, columns, rows):
 def _write_sheets(sheet_data):
     """Write multiple sheets atomically in one lock."""
     with _file_lock:
+        _backup_workbook()
         wb = _open_workbook()
         for sheet_name, columns, rows in sheet_data:
             ws = wb[sheet_name]
@@ -533,6 +367,161 @@ def _write_sheets(sheet_data):
                 for ci in date_col_indices:
                     ws.cell(row=r, column=ci).number_format = DATE_FMT
         _safe_save(wb)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  GOOGLE SHEETS EXPENSE INBOX → LOCAL EXCEL
+# ═══════════════════════════════════════════════════════════════
+
+_VALID_CATEGORIES = {
+    "food", "grocery", "travel", "housing", "health",
+    "entertainment", "utilities", "shopping", "other",
+}
+_VALID_PAYMENTS = {"card", "debit", "cash", "transfer", "upi"}
+
+
+def _normalise_category(raw):
+    cleaned = str(raw or "").strip().lower().replace(" ", "_")
+    if cleaned in _VALID_CATEGORIES:
+        return cleaned
+    return {
+        "food_&_dining": "food", "dining": "food", "groceries": "grocery",
+        "transport": "travel", "transportation": "travel", "cab": "travel",
+        "rent": "housing", "home": "housing", "medical": "health",
+        "medicine": "health", "pharmacy": "health", "bills": "utilities",
+        "electricity": "utilities", "internet": "utilities",
+        "movies": "entertainment", "games": "entertainment",
+        "clothes": "shopping", "amazon": "shopping",
+    }.get(cleaned, "other")
+
+
+def _normalise_payment(raw):
+    cleaned = str(raw or "").strip().lower().replace(" ", "_")
+    if cleaned in _VALID_PAYMENTS:
+        return cleaned
+    return {
+        "credit_card": "card", "credit": "card", "cc": "card",
+        "debit_card": "debit", "dc": "debit", "bank_transfer": "transfer",
+        "neft": "transfer", "imps": "transfer", "google_pay": "upi",
+        "gpay": "upi", "phonepe": "upi", "paytm": "upi",
+    }.get(cleaned, "card")
+
+
+def _normalise_form_date(raw):
+    value = str(raw or "").strip()
+    for fmt in (
+        "%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%Y/%m/%d",
+        "%d %b %Y", "%d %B %Y", "%m/%d/%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S",
+    ):
+        try:
+            return datetime.strptime(value, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return date.today().isoformat()
+
+
+def _expense_fingerprint(expense):
+    amount = float(expense.get("amount") or 0)
+    raw = "|".join((
+        str(expense.get("date") or ""),
+        f"{amount:.2f}",
+        str(expense.get("description") or "").strip().casefold(),
+    ))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _open_form_worksheet():
+    """Connect lazily so local operation does not depend on Google being available."""
+    if not GSHEETS_SPREADSHEET_ID:
+        raise RuntimeError("GSHEETS_SPREADSHEET_ID is not configured")
+    if not GSHEETS_CREDS_FILE.exists():
+        raise RuntimeError(f"Google credentials not found: {GSHEETS_CREDS_FILE}")
+    credentials = Credentials.from_service_account_file(
+        str(GSHEETS_CREDS_FILE), scopes=GSHEETS_SCOPES
+    )
+    spreadsheet = gspread.authorize(credentials).open_by_key(GSHEETS_SPREADSHEET_ID)
+    return spreadsheet.worksheet(FORM_SHEET_NAME)
+
+
+def _sync_form_expenses():
+    """Move valid, unseen expense-inbox rows from Google Sheets into data.xlsx."""
+    global _last_sync_result
+    with _sync_lock:
+        errors = []
+        timestamp = datetime.now().isoformat()
+        try:
+            worksheet = _open_form_worksheet()
+            sheet_rows = worksheet.get_all_values()
+            if len(sheet_rows) <= 1:
+                _last_sync_result = {"synced": 0, "errors": [], "timestamp": timestamp}
+                return 0, []
+
+            header = {name.strip(): index for index, name in enumerate(sheet_rows[0])}
+
+            def field(row, *names):
+                for name in names:
+                    index = header.get(name)
+                    if index is not None and index < len(row):
+                        return row[index]
+                return ""
+
+            local_expenses = _read_sheet("Expenses", EXPENSE_COLS)
+            account_rows = _read_sheet("Accounts", ACCOUNT_COLS)
+            default_spending_account = next(
+                (
+                    int(row["id"]) for row in account_rows
+                    if row.get("id") and str(row.get("purpose") or "").lower() == "spending"
+                    and row.get("active") is not False
+                ),
+                None,
+            )
+            existing = {_expense_fingerprint(item) for item in local_expenses}
+            next_id = max((int(item.get("id") or 0) for item in local_expenses), default=0)
+            additions = []
+            processed_rows = []
+
+            for sheet_row_number, row in enumerate(sheet_rows[1:], start=2):
+                try:
+                    amount_text = str(field(row, "Amount")).replace(",", "").strip()
+                    amount = float(amount_text)
+                    if amount <= 0:
+                        raise ValueError("amount must be greater than zero")
+                    item = {
+                        "date": _normalise_form_date(
+                            field(row, "Expense Date", "ExpenseDate", "Timestamp")
+                        ),
+                        "description": str(field(row, "Description")).strip() or "Form entry",
+                        "category": _normalise_category(field(row, "Category")),
+                        "payment": _normalise_payment(field(row, "PaymentMode", "Payment Mode")),
+                        "amount": amount,
+                        "accountId": default_spending_account,
+                    }
+                    fingerprint = _expense_fingerprint(item)
+                    if fingerprint not in existing:
+                        next_id += 1
+                        item["id"] = next_id
+                        additions.append(item)
+                        existing.add(fingerprint)
+                    processed_rows.append(sheet_row_number)
+                except (TypeError, ValueError) as exc:
+                    errors.append(f"Row {sheet_row_number}: {exc}")
+
+            if additions:
+                _write_sheet("Expenses", EXPENSE_COLS, local_expenses + additions)
+
+            # Clear only successfully imported or duplicate rows. Invalid rows remain visible.
+            for row_number in reversed(processed_rows):
+                worksheet.delete_rows(row_number)
+
+            _last_sync_result = {
+                "synced": len(additions), "errors": errors, "timestamp": timestamp
+            }
+            return len(additions), errors
+        except Exception as exc:
+            errors.append(f"Google Sheets sync failed: {exc}")
+            _last_sync_result = {"synced": 0, "errors": errors, "timestamp": timestamp}
+            return 0, errors
 
 # ═══════════════════════════════════════════════════════════════
 #  STATIC FILE SERVING
@@ -582,6 +571,7 @@ def get_expenses():
     for r in rows:
         r["id"] = int(r["id"]) if r["id"] else 0
         r["amount"] = float(r["amount"]) if r["amount"] else 0
+        r["accountId"] = int(r["accountId"]) if r.get("accountId") else None
     return jsonify(rows)
 
 
@@ -592,6 +582,23 @@ def save_expenses():
         return jsonify({"error": "Expected array"}), 400
     _write_sheet("Expenses", EXPENSE_COLS, data)
     return jsonify({"ok": True, "count": len(data)})
+
+
+@app.route("/api/sync-form-expenses", methods=["POST"])
+def api_sync_form_expenses():
+    """Manually pull new expense-inbox rows into the local workbook."""
+    synced, errors = _sync_form_expenses()
+    status = 200 if not errors or synced else 502
+    return jsonify({
+        "synced": synced,
+        "errors": errors,
+        "timestamp": _last_sync_result["timestamp"],
+    }), status
+
+
+@app.route("/api/sync-form-expenses", methods=["GET"])
+def api_sync_status():
+    return jsonify(_last_sync_result)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -620,6 +627,7 @@ def get_investments():
                 "action": t["action"],
                 "units": float(t["units"]) if t["units"] else 0,
                 "price": float(t["price"]) if t["price"] else 0,
+                "accountId": int(t["accountId"]) if t.get("accountId") else None,
             })
 
     return jsonify(invs)
@@ -634,14 +642,36 @@ def save_investments():
     inv_rows = []
     txn_rows = []
     for inv in data:
+        if not isinstance(inv, dict) or not inv.get("id") or not inv.get("category"):
+            return jsonify({"error": "Each investment requires id and category"}), 400
+        try:
+            units = float(inv.get("units") or 0)
+            buy_price = float(inv.get("buyPrice") or 0)
+            current_price = float(inv.get("currentPrice") or 0)
+        except (TypeError, ValueError):
+            return jsonify({"error": "Investment amounts must be numeric"}), 400
+        if min(units, buy_price, current_price) < 0:
+            return jsonify({"error": "Investment amounts cannot be negative"}), 400
         inv_rows.append({c: inv.get(c) for c in INVESTMENT_COLS})
         for txn in inv.get("transactions", []):
+            action = str(txn.get("action") or "").upper()
+            try:
+                txn_units = float(txn.get("units") or 0)
+                txn_price = float(txn.get("price") or 0)
+            except (TypeError, ValueError):
+                return jsonify({"error": "Transaction units and price must be numeric"}), 400
+            valid_actions = {
+                "BUY", "SELL", "DEPOSIT", "INTEREST", "WITHDRAWAL", "ADJUSTMENT",
+            }
+            if action not in valid_actions or txn_units <= 0 or txn_price < 0:
+                return jsonify({"error": "Invalid investment transaction"}), 400
             txn_rows.append({
                 "investmentId": inv["id"],
                 "date": txn.get("date"),
-                "action": txn.get("action"),
-                "units": txn.get("units"),
-                "price": txn.get("price"),
+                "action": action,
+                "units": txn_units,
+                "price": txn_price,
+                "accountId": txn.get("accountId"),
             })
 
     _write_sheets([
@@ -685,7 +715,7 @@ def _compute_derived_savings(rows):
     # Investment outflows (BUY transactions) by YYYY-MM
     inv_map = {}
     for t in _read_sheet("Transactions", TRANSACTION_COLS):
-        if (t.get("action") or "").upper() == "BUY":
+        if (t.get("action") or "").upper() in {"BUY", "DEPOSIT"}:
             d = t.get("date") or ""
             key = d[:7]
             units = float(t["units"]) if t["units"] else 0
@@ -740,6 +770,7 @@ def patch_savings_month(month_label):
     """Update or create income for a single month, e.g. 'Apr 2026'."""
     body = request.get_json(force=True)
     income = body.get("income")
+    account_id = body.get("accountId")
     if income is None:
         return jsonify({"error": "income required"}), 400
     rows = _read_sheet("SavingsHistory", SAVINGS_HIST_COLS)
@@ -747,10 +778,12 @@ def patch_savings_month(month_label):
     for r in rows:
         if r["month"] == month_label:
             r["income"] = income
+            if account_id is not None:
+                r["accountId"] = account_id
             found = True
             break
     if not found:
-        rows.append({"month": month_label, "income": income})
+        rows.append({"month": month_label, "income": income, "accountId": account_id})
     rows = _compute_derived_savings(rows)
     _write_sheet("SavingsHistory", SAVINGS_HIST_COLS, rows)
     return jsonify({"ok": True, "month": month_label, "income": income})
@@ -786,7 +819,7 @@ def save_savings_goals():
 @app.route("/api/emergency-fund", methods=["GET"])
 def get_emergency_fund():
     rows = _read_sheet("EmergencyFund", EMERGENCY_COLS)
-    target = float(rows[0]["target"]) if rows and rows[0]["target"] else 500000
+    target = float(rows[0]["target"]) if rows and rows[0]["target"] else 0
 
     contribs = _read_sheet("EFContributions", EMERGENCY_CONTRIB_COLS)
     contrib_list = []
@@ -805,7 +838,7 @@ def get_emergency_fund():
 def save_emergency_fund():
     data = request.get_json(force=True)
     # Save target
-    _write_sheet("EmergencyFund", EMERGENCY_COLS, [{"target": data.get("target", 500000)}])
+    _write_sheet("EmergencyFund", EMERGENCY_COLS, [{"target": data.get("target", 0)}])
     # Save contributions
     contribs = data.get("contributions", [])
     rows = []
@@ -818,6 +851,145 @@ def save_emergency_fund():
         })
     _write_sheet("EFContributions", EMERGENCY_CONTRIB_COLS, rows)
     return jsonify({"ok": True})
+
+
+# ═══════════════════════════════════════════════════════════════
+#  API: FINANCIAL PLANNING
+# ═══════════════════════════════════════════════════════════════
+
+def _planning_response(sheet_name, columns):
+    return jsonify(_read_sheet(sheet_name, columns))
+
+
+def _save_planning_rows(sheet_name, columns):
+    data = request.get_json(force=True)
+    if not isinstance(data, list):
+        return jsonify({"error": "Expected array"}), 400
+    cleaned = [{column: row.get(column) for column in columns} for row in data if isinstance(row, dict)]
+    _write_sheet(sheet_name, columns, cleaned)
+    return jsonify({"ok": True, "count": len(cleaned)})
+
+
+@app.route("/api/budgets", methods=["GET"])
+def get_budgets():
+    return _planning_response("Budgets", BUDGET_COLS)
+
+
+@app.route("/api/budgets", methods=["POST"])
+def save_budgets():
+    return _save_planning_rows("Budgets", BUDGET_COLS)
+
+
+@app.route("/api/recurring-bills", methods=["GET"])
+def get_recurring_bills():
+    return _planning_response("RecurringBills", RECURRING_BILL_COLS)
+
+
+@app.route("/api/recurring-bills", methods=["POST"])
+def save_recurring_bills():
+    return _save_planning_rows("RecurringBills", RECURRING_BILL_COLS)
+
+
+@app.route("/api/net-worth", methods=["GET"])
+def get_net_worth():
+    return _planning_response("NetWorth", NET_WORTH_COLS)
+
+
+@app.route("/api/net-worth", methods=["POST"])
+def save_net_worth():
+    return _save_planning_rows("NetWorth", NET_WORTH_COLS)
+
+
+@app.route("/api/cash-flow", methods=["GET"])
+def get_cash_flow():
+    return _planning_response("CashFlow", CASH_FLOW_COLS)
+
+
+@app.route("/api/cash-flow", methods=["POST"])
+def save_cash_flow():
+    return _save_planning_rows("CashFlow", CASH_FLOW_COLS)
+
+
+@app.route("/api/accounts", methods=["GET"])
+def get_accounts():
+    rows = _read_sheet("Accounts", ACCOUNT_COLS)
+    for row in rows:
+        row["id"] = int(row["id"]) if row.get("id") else 0
+        row["openingBalance"] = float(row["openingBalance"] or 0)
+        row["statementBalance"] = float(row["statementBalance"] or 0)
+    return jsonify(rows)
+
+
+@app.route("/api/accounts", methods=["POST"])
+def save_accounts():
+    data = request.get_json(force=True)
+    if not isinstance(data, list):
+        return jsonify({"error": "Expected array"}), 400
+    cleaned = []
+    valid_purposes = {"salary", "investment", "spending", "savings", "other"}
+    for row in data:
+        if not isinstance(row, dict) or not row.get("id") or not str(row.get("name") or "").strip():
+            return jsonify({"error": "Each account requires id and name"}), 400
+        purpose = str(row.get("purpose") or "other").lower()
+        if purpose not in valid_purposes:
+            return jsonify({"error": "Invalid account purpose"}), 400
+        try:
+            opening = float(row.get("openingBalance") or 0)
+            statement = float(row.get("statementBalance") or 0)
+        except (TypeError, ValueError):
+            return jsonify({"error": "Account balances must be numeric"}), 400
+        cleaned.append({
+            **{column: row.get(column) for column in ACCOUNT_COLS},
+            "name": str(row["name"]).strip(),
+            "bank": str(row.get("bank") or "").strip(),
+            "purpose": purpose,
+            "openingBalance": opening,
+            "statementBalance": statement,
+        })
+    _write_sheet("Accounts", ACCOUNT_COLS, cleaned)
+    return jsonify({"ok": True, "count": len(cleaned)})
+
+
+@app.route("/api/transfers", methods=["GET"])
+def get_transfers():
+    rows = _read_sheet("Transfers", TRANSFER_COLS)
+    for row in rows:
+        row["id"] = int(row["id"]) if row.get("id") else 0
+        row["fromAccountId"] = int(row["fromAccountId"]) if row.get("fromAccountId") else None
+        row["toAccountId"] = int(row["toAccountId"]) if row.get("toAccountId") else None
+        row["amount"] = float(row["amount"] or 0)
+    return jsonify(rows)
+
+
+@app.route("/api/transfers", methods=["POST"])
+def save_transfers():
+    data = request.get_json(force=True)
+    if not isinstance(data, list):
+        return jsonify({"error": "Expected array"}), 400
+    account_ids = {
+        int(row["id"]) for row in _read_sheet("Accounts", ACCOUNT_COLS) if row.get("id")
+    }
+    cleaned = []
+    for row in data:
+        try:
+            from_id = int(row.get("fromAccountId"))
+            to_id = int(row.get("toAccountId"))
+            amount = float(row.get("amount") or 0)
+        except (TypeError, ValueError, AttributeError):
+            return jsonify({"error": "Invalid transfer"}), 400
+        if (from_id == to_id or from_id not in account_ids or to_id not in account_ids
+                or amount <= 0 or not row.get("date")):
+            return jsonify({"error": "Transfer requires different accounts, date, and positive amount"}), 400
+        cleaned.append({
+            "id": row.get("id"),
+            "date": row.get("date"),
+            "fromAccountId": from_id,
+            "toAccountId": to_id,
+            "amount": amount,
+            "note": str(row.get("note") or "").strip(),
+        })
+    _write_sheet("Transfers", TRANSFER_COLS, cleaned)
+    return jsonify({"ok": True, "count": len(cleaned)})
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -873,7 +1045,7 @@ def proxy_mf_price(scheme_code):
 @app.route("/api/export")
 def export_excel():
     """Download the data.xlsx file."""
-    return send_from_directory(str(BASE_DIR), "data.xlsx",
+    return send_from_directory(str(DATA_FILE.parent), DATA_FILE.name,
                                as_attachment=True,
                                download_name="FinTrack_data.xlsx")
 
@@ -885,7 +1057,6 @@ def export_excel():
 DOCS_DIR = BASE_DIR / "documents"
 DEFAULT_DOC_CATEGORIES = ["salary_slips", "tax", "insurance", "investments", "bank_statements"]
 
-import re
 from werkzeug.utils import secure_filename
 
 
@@ -1056,7 +1227,13 @@ def create_doc_year(category):
 if __name__ == "__main__":
     _ensure_workbook()
     _ensure_doc_dirs()
+    synced, sync_errors = _sync_form_expenses()
+    if synced:
+        print(f"[OK] Imported {synced} new expense(s) from Google Sheets")
+    elif sync_errors:
+        print(f"[!] Google Sheets expense sync skipped: {sync_errors[0]}")
     port = int(os.environ.get("PORT", 5000))
-    debug = os.environ.get("FLASK_DEBUG", "true").lower() in ("1", "true", "yes")
+    host = os.environ.get("FINTRACK_HOST", "127.0.0.1")
+    debug = os.environ.get("FLASK_DEBUG", "false").lower() in ("1", "true", "yes")
     print(f"\n  FinTrack server running at http://localhost:{port}\n")
-    app.run(host="0.0.0.0", port=port, debug=debug)
+    app.run(host=host, port=port, debug=debug, use_reloader=False)

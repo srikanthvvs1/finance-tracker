@@ -601,11 +601,167 @@ html, body {
 }
 
 .chart-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 14px;
+}
+
+.chart-empty-message {
+  width: 100%;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.financial-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin: 0 0 22px;
+  padding: 16px 18px;
+  background: linear-gradient(135deg, #eef2ff, #f8fafc);
+  border: 1px solid #c7d2fe;
+  border-radius: 14px;
+}
+
+.financial-summary-icon { font-size: 24px; }
+.financial-summary strong { display: block; color: #312e81; margin-bottom: 4px; }
+.financial-summary p { margin: 0; color: var(--text-secondary); line-height: 1.55; }
+
+.planning-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.plan-kpi {
+  padding: 18px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-sm);
+}
+
+.plan-kpi span { display: block; color: var(--text-muted); font-size: 12px; margin-bottom: 8px; }
+.plan-kpi strong { font-size: 22px; color: var(--text-primary); }
+
+.planning-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.compact-form {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  margin-top: 14px;
+  padding: 16px 0;
 }
+
+.compact-form .checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.compact-form .checkbox-label input {
+  width: auto;
+  margin: 0;
+}
+
+.compact-btn { padding: 7px 10px; font-size: 12px; }
+
+.compact-form input,
+.compact-form select {
+  min-width: 130px;
+  flex: 1;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text-primary);
+}
+
+.planning-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.planning-form-grid .btn-primary { grid-column: 1 / -1; }
+.planning-list { display: grid; gap: 10px; }
+
+.planning-help {
+  margin: -4px 0 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.account-balance-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.account-ledger-card {
+  grid-column: 1 / -1;
+}
+
+.account-ledger-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  padding: 12px 0;
+}
+
+.account-ledger-summary span {
+  color: var(--text-muted);
+}
+
+.planning-row {
+  position: relative;
+  padding: 12px 34px 12px 12px;
+  background: #f8fafc;
+  border-radius: 10px;
+}
+
+.planning-row.simple {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.planning-row-main,
+.planning-row.simple > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.planning-row span { color: var(--text-muted); font-size: 12px; }
+.budget-progress { height: 6px; margin-top: 9px; background: #e2e8f0; border-radius: 999px; overflow: hidden; }
+.budget-progress span { display: block; height: 100%; border-radius: inherit; }
+
+.planning-delete {
+  border: 0;
+  background: transparent;
+  color: #ef4444;
+  font-size: 20px;
+  cursor: pointer;
+}
+
+.planning-row:not(.simple) .planning-delete { position: absolute; top: 8px; right: 8px; }
+.planning-empty { margin: 8px 0; padding: 18px; text-align: center; color: var(--text-muted); }
+.forecast-panel { margin-top: 8px; }
+.forecast-equation { display: grid; gap: 10px; }
+.forecast-equation span { display: flex; justify-content: space-between; padding: 10px 12px; background: #f8fafc; border-radius: 8px; }
+.forecast-equation .forecast-good { background: #ecfdf5; color: #047857; }
+.forecast-equation .forecast-warning { background: #fef2f2; color: #b91c1c; }
 
 .legend-item {
   display: flex;
@@ -2125,6 +2281,10 @@ html, body {
 }
 
 @media (max-width: 768px) {
+  .planning-kpis,
+  .planning-grid { grid-template-columns: 1fr; }
+  .planning-form-grid { grid-template-columns: 1fr; }
+
   :root { --sidebar-width: 0px; }
   .sidebar      { transform: translateX(-240px); }
   .main-content { margin-left: 0; padding: 0 16px 40px; }

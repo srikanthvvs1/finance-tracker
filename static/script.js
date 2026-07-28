@@ -7,6 +7,12 @@ let investments = [];
 let savingsHistory = [];
 let savingsGoals = [];
 let emergencyFund = { target: 0, current: 0, contributions: [] };
+let budgets = [];
+let recurringBills = [];
+let netWorthHistory = [];
+let cashFlowSettings = [];
+let accounts = [];
+let transfers = [];
 
 /* ── Server API base URL (relative — works on any host/port) ── */
 const API_BASE = '/api';
@@ -31,18 +37,30 @@ async function apiPost(path, body) {
 /* ── Load all data from server (Excel is the single source of truth) ── */
 async function loadAllData() {
   try {
-    const [exp, inv, sh, sg, ef] = await Promise.all([
+    const [exp, inv, sh, sg, ef, budgetRows, billRows, netWorthRows, cashFlowRows, accountRows, transferRows] = await Promise.all([
       apiGet('/expenses'),
       apiGet('/investments'),
       apiGet('/savings-history'),
       apiGet('/savings-goals'),
       apiGet('/emergency-fund'),
+      apiGet('/budgets'),
+      apiGet('/recurring-bills'),
+      apiGet('/net-worth'),
+      apiGet('/cash-flow'),
+      apiGet('/accounts'),
+      apiGet('/transfers'),
     ]);
     expenses       = exp;
     investments    = inv;
     savingsHistory = sh;
     savingsGoals   = sg;
     emergencyFund  = ef;
+    budgets = budgetRows;
+    recurringBills = billRows;
+    netWorthHistory = netWorthRows;
+    cashFlowSettings = cashFlowRows;
+    accounts = accountRows;
+    transfers = transferRows;
     serverAvailable = true;
     console.log(`✅ Data loaded from Excel — ${exp.length} expenses, ${inv.length} investments, ${sh.length} savings months, ${sg.length} goals`);
   } catch (e) {
@@ -52,6 +70,12 @@ async function loadAllData() {
     savingsHistory = [];
     savingsGoals   = [];
     emergencyFund  = { target: 0, current: 0, contributions: [] };
+    budgets = [];
+    recurringBills = [];
+    netWorthHistory = [];
+    cashFlowSettings = [];
+    accounts = [];
+    transfers = [];
     serverAvailable = false;
   }
 }
@@ -62,6 +86,12 @@ function saveInvestments()    { if (serverAvailable) apiPost('/investments', inv
 function saveSavingsHistory() { if (serverAvailable) apiPost('/savings-history', savingsHistory).catch(e => console.error('Save savings history failed:', e)); }
 function saveSavingsGoals()   { if (serverAvailable) apiPost('/savings-goals', savingsGoals).catch(e => console.error('Save goals failed:', e)); }
 function saveEmergencyFund()  { if (serverAvailable) apiPost('/emergency-fund', { target: emergencyFund.target, contributions: emergencyFund.contributions }).catch(e => console.error('Save emergency fund failed:', e)); }
+function saveBudgets()        { if (serverAvailable) return apiPost('/budgets', budgets); }
+function saveRecurringBills() { if (serverAvailable) return apiPost('/recurring-bills', recurringBills); }
+function saveNetWorth()       { if (serverAvailable) return apiPost('/net-worth', netWorthHistory); }
+function saveCashFlow()       { if (serverAvailable) return apiPost('/cash-flow', cashFlowSettings); }
+function saveAccounts()       { if (serverAvailable) return apiPost('/accounts', accounts); }
+function saveTransfers()      { if (serverAvailable) return apiPost('/transfers', transfers); }
 
 /* ── Sync form expenses (Google Form → main Expenses sheet) ── */
 async function syncFormExpenses() {
@@ -76,6 +106,8 @@ async function syncFormExpenses() {
       renderDashboardCards();
       renderSavingsCards();
       renderSavingsTable();
+      renderPlanning();
+      initCharts();
       if (typeof updateMonthDisplay === 'function') updateMonthDisplay();
       // Show toast notification
       showSyncToast(res.synced);
@@ -188,20 +220,10 @@ const priceProviders = {
       } catch (e) { logDebug(label, 'Server proxy', 'error', e.message); }
     }
 
-    /* Strategy 2: Direct mfapi.in (CORS-safe) */
-    try {
-      const url = `https://api.mfapi.in/mf/${inv.schemeCode}`;
-      logDebug(label, 'mfapi.in', 'pending', url);
-      const res = await fetch(url);
-      if (!res.ok) { logDebug(label, 'mfapi.in', 'error', `HTTP ${res.status}`); return null; }
-      const data = await res.json();
-      const nav = parseFloat(data.data?.[0]?.nav) || null;
-      logDebug(label, 'mfapi.in', nav ? 'success' : 'error', nav ? `NAV ₹${nav}` : 'NAV parse failed');
-      return nav;
-    } catch (e) { logDebug(label, 'mfapi.in', 'error', e.message || String(e)); return null; }
+    return null;
   },
 
-  /* ── Stocks — Local server proxy → Yahoo direct → CORS proxies ── */
+  /* ── Stocks — local server proxy ── */
   async stocks(inv) {
     if (!inv.ticker) return null;
     const label = inv.ticker;
@@ -223,51 +245,6 @@ const priceProviders = {
       } catch (e) { logDebug(label, 'Server proxy', 'error', e.message); }
     }
 
-    /* Strategy 2: Direct Yahoo fetch (may work from http://localhost) */
-    const yUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(inv.ticker)}?interval=1d&range=1d`;
-    try {
-      logDebug(label, 'Yahoo (direct)', 'pending', yUrl);
-      const res = await fetch(yUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-      if (res.ok) {
-        const data = await res.json();
-        const price = data.chart?.result?.[0]?.meta?.regularMarketPrice;
-        if (price) { logDebug(label, 'Yahoo (direct)', 'success', `₹${price}`); return price; }
-        logDebug(label, 'Yahoo (direct)', 'error', 'Price missing in response');
-      } else {
-        logDebug(label, 'Yahoo (direct)', 'error', `HTTP ${res.status}`);
-      }
-    } catch (e) { logDebug(label, 'Yahoo (direct)', 'error', e.message || 'CORS/Network error'); }
-
-    /* Strategy 3: Free CORS proxies (last resort) */
-    const proxyNames = ['codetabs', 'allorigins', 'corsproxy.io'];
-    const proxies = [
-      `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(yUrl)}`,
-      `https://api.allorigins.win/raw?url=${encodeURIComponent(yUrl)}`,
-      `https://corsproxy.io/?${encodeURIComponent(yUrl)}`,
-    ];
-    for (let i = 0; i < proxies.length; i++) {
-      const proxyUrl = proxies[i];
-      const pName = proxyNames[i];
-      try {
-        logDebug(label, pName, 'pending', proxyUrl.substring(0, 80) + '…');
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 8000);
-        const res = await fetch(proxyUrl, { signal: controller.signal });
-        clearTimeout(timeout);
-        if (!res.ok) { logDebug(label, pName, 'error', `HTTP ${res.status}`); continue; }
-        const text = await res.text();
-        if (text.includes('Too Many')) { logDebug(label, pName, 'error', 'Rate limited (Too Many Requests)'); continue; }
-        if (text.length < 50) { logDebug(label, pName, 'error', `Response too short (${text.length} bytes)`); continue; }
-        const data = JSON.parse(text);
-        const price = data.chart?.result?.[0]?.meta?.regularMarketPrice;
-        if (price) { logDebug(label, pName, 'success', `₹${price}`); return price; }
-        logDebug(label, pName, 'error', 'Price missing in parsed JSON');
-      } catch (e) {
-        const msg = e.name === 'AbortError' ? 'Timeout (8s)' : (e.message || String(e));
-        logDebug(label, pName, 'error', msg);
-        continue;
-      }
-    }
     return null;
   },
 
@@ -380,6 +357,7 @@ const sectionMeta = {
   expenses:    ['Expenses',    'Track and manage your spending'],
   investments: ['Investments', 'Monitor your investment portfolio'],
   savings:     ['Savings',     'Your savings goals and history'],
+  planning:    ['Financial Plan', 'Budgets, bills, net worth and cash-flow forecast'],
   stocks:      ['Stocks & Mutual Funds', 'Detailed portfolio analytics'],
   otherinv:    ['Other Investments', 'Gold, PPF, NPS & Fixed Deposits'],
   documents:   ['Documents',   'Salary slips, tax, insurance & more'],
@@ -409,12 +387,13 @@ function navigateTo(section) {
   /* Swap header-right contents based on section */
   const isInvPage = (section === 'investments' || isSubPage);
   const isDocPage = (section === 'documents');
+  const isPlanningPage = (section === 'planning');
   const monthSel   = document.getElementById('headerMonthSelector');
   const addBtn     = document.getElementById('addEntryBtn');
   const refreshBtn = document.getElementById('headerRefreshBtn');
   const refreshSt  = document.getElementById('headerRefreshStatus');
   if (monthSel)   monthSel.style.display   = (isInvPage || isDocPage) ? 'none' : '';
-  if (addBtn)     addBtn.style.display     = (isInvPage || isDocPage) ? 'none' : '';
+  if (addBtn)     addBtn.style.display     = (isInvPage || isDocPage || isPlanningPage) ? 'none' : '';
   if (refreshBtn) refreshBtn.style.display = isInvPage ? '' : 'none';
   if (refreshSt)  refreshSt.style.display  = isInvPage ? '' : 'none';
 
@@ -448,6 +427,10 @@ document.getElementById('addEntryBtn')?.addEventListener('click', () => {
    ============================================================ */
 function openModal(id) {
   document.getElementById(id)?.classList.add('open');
+  if (id === 'expenseModal' && !_editingExpenseId) {
+    const select = document.getElementById('expAccount');
+    if (select && !select.value) select.value = String(defaultAccountId('spending') || '');
+  }
 }
 
 /**
@@ -463,6 +446,10 @@ function openInvestmentModal(filter) {
       else if (filter === 'other')  opt.hidden = !otherCategories.includes(opt.value);
       else                          opt.hidden = false;
     });
+  }
+  const accountSelect = document.getElementById('invAccount');
+  if (accountSelect && !accountSelect.value) {
+    accountSelect.value = String(defaultAccountId('investment') || '');
   }
   openModal('investmentModal');
 }
@@ -528,8 +515,11 @@ function renderInvestmentSnapshot() {
   if (!el) return;
 
   el.innerHTML = investments.slice(0, 5).map(inv => {
-    const value   = inv.units * inv.currentPrice;
-    const gainPct = ((inv.currentPrice - inv.buyPrice) / inv.buyPrice * 100).toFixed(1);
+    const metrics = investmentMetrics(inv);
+    const value = metrics.currentValue;
+    const gainPct = (metrics.costBasis > 0
+      ? (metrics.currentValue - metrics.costBasis) / metrics.costBasis * 100
+      : 0).toFixed(1);
     const isPos   = parseFloat(gainPct) >= 0;
     return `
       <div class="inv-item">
@@ -646,7 +636,20 @@ function populateYearDropdown() {
 function updateExpenseSummaryStrip(filtered) {
   const total    = filtered.reduce((s, e) => s + e.amount, 0);
   const count    = filtered.length;
-  const avgDay   = count ? total / 30 : 0;
+  const today = new Date();
+  let periodDays = 0;
+  if (expFilterMonth !== 'all' && expFilterYear !== 'all') {
+    const month = Number(expFilterMonth);
+    const year = Number(expFilterYear);
+    const isCurrent = month === today.getMonth() + 1 && year === today.getFullYear();
+    periodDays = isCurrent ? today.getDate() : new Date(year, month, 0).getDate();
+  } else if (filtered.length) {
+    const dates = filtered.map(row => new Date(row.date)).filter(d => !Number.isNaN(d.valueOf()));
+    periodDays = dates.length
+      ? Math.max(1, Math.ceil((Math.max(...dates) - Math.min(...dates)) / 86400000) + 1)
+      : 0;
+  }
+  const avgDay = periodDays ? total / periodDays : 0;
   const largest  = filtered.reduce((max, e) => e.amount > max.amount ? e : max, { amount: 0, category: '' });
   const largestCat = largest.amount ? (categoryConfig[largest.category]?.label || 'Other') : '-';
 
@@ -658,7 +661,6 @@ function updateExpenseSummaryStrip(filtered) {
     : '-';
 
   /* Run-rate forecast: projected month-end spend */
-  const today = new Date();
   const isCurrentMonth = (expFilterMonth === 'all' || parseInt(expFilterMonth) === today.getMonth() + 1)
                       && (expFilterYear === 'all' || parseInt(expFilterYear) === today.getFullYear());
   const forecastEl = document.getElementById('stripForecast');
@@ -687,6 +689,7 @@ function openExpenseModalForEdit(id) {
   form.description.value = exp.description;
   form.category.value    = exp.category;
   form.payment.value     = exp.payment || 'upi';
+  form.accountId.value   = exp.accountId || '';
   if (form.notes) form.notes.value = exp.notes || '';
   // Update modal title & button
   const modal = document.getElementById('expenseModal');
@@ -815,11 +818,11 @@ document.getElementById('headerRefreshBtn')?.addEventListener('click', async () 
 
 /* ---- Per-category label / placeholder config ---- */
 const invFieldCfg = {
-  stocks:        { asset:'Stock Ticker <small class="hint">(.NS auto-added)</small>',  assetPh:'e.g. RELIANCE, TCS',  name:'Company Name', namePh:'e.g. Reliance Industries',  units:'Shares',        buy:'Buy Price (₹ / share)',   curr:'Current Price (₹ / share)' },
+  stocks:        { asset:'Stock Ticker <small class="hint">(.NS auto-added)</small>',  assetPh:'Ticker symbol',  name:'Company Name', namePh:'Company name',  units:'Shares',        buy:'Buy Price (₹ / share)',   curr:'Current Price (₹ / share)' },
   foreign_stocks:{ asset:'Stock Ticker',  assetPh:'e.g. AAPL, MSFT',    name:'Company Name', namePh:'e.g. Apple Inc.',           units:'Shares',        buy:'Buy Price (₹ / share)',   curr:'Current Price (₹ / share)' },
   mutual_funds:  { asset:'Fund Code',     assetPh:'e.g. HDFC-TOP100',   name:'Fund Name',    namePh:'e.g. HDFC Top 100 Fund',   units:'Units',         buy:'Buy NAV (₹)',             curr:'Current NAV (₹)' },
   gold:          { asset:'Gold Type',     assetPh:'e.g. PHYSICAL, SGB', name:'Description',  namePh:'e.g. Physical Gold 24K',   units:'Quantity (g)',   buy:'Buy Price (₹ / g)',       curr:'Current Price (₹ / g)' },
-  ppf:           { asset:'Account ID',    assetPh:'e.g. PPF-SBI',       name:'Account Name', namePh:'e.g. PPF – State Bank',    units:'Installments',  buy:'Amount per Install (₹)',  curr:'Current Value (₹)' },
+  ppf:           { asset:'Account ID',    assetPh:'e.g. PPF-SBI',       name:'Account Name', namePh:'e.g. PPF – State Bank',    units:'Account',       buy:'Total Deposited (₹)',     curr:'Current Balance (₹)' },
   nps:           { asset:'Account ID',    assetPh:'e.g. NPS-TIER1',     name:'Account Name', namePh:'e.g. NPS Tier-1',          units:'Units',         buy:'Buy NAV (₹)',             curr:'Current NAV (₹)' },
   fixed_deposit: { asset:'FD Reference',  assetPh:'e.g. SBI-FD-2025',   name:'Description',  namePh:'e.g. SBI FD 3yr @7.1%',   units:'Deposits',      buy:'Principal (₹)',           curr:'Maturity Value (₹)' },
 };
@@ -850,6 +853,15 @@ document.getElementById('invType')?.addEventListener('change', e => {
   /* MF scheme-code field */
   const schemeGroup = document.getElementById('invSchemeGroup');
   if (schemeGroup) schemeGroup.style.display = cat === 'mutual_funds' ? '' : 'none';
+
+  const isBalanceAccount = ['ppf', 'fixed_deposit'].includes(cat);
+  const unitsGroup = document.getElementById('invUnitsGroup');
+  const unitsInput = document.getElementById('invUnits');
+  if (unitsGroup) unitsGroup.style.display = isBalanceAccount ? 'none' : '';
+  if (unitsInput) {
+    unitsInput.required = !isBalanceAccount;
+    unitsInput.value = isBalanceAccount ? '1' : '';
+  }
 });
 
 /* Re-render whichever investment detail view is currently active */
@@ -878,12 +890,122 @@ function renderAfterInvestmentChange() {
    ============================================================ */
 const marketCategories = ['stocks', 'foreign_stocks', 'mutual_funds'];
 const otherCategories  = ['gold', 'ppf', 'nps', 'fixed_deposit'];
-const tradableCategories = ['stocks', 'foreign_stocks', 'mutual_funds'];
+const tradableCategories = ['stocks', 'foreign_stocks', 'mutual_funds', 'gold'];
+const balanceCategories = ['ppf', 'fixed_deposit'];
+
+/**
+ * Calculate holdings using moving-average cost. SELL proceeds reduce units at
+ * average cost; they never reduce cost basis at the market selling price.
+ */
+function investmentMetrics(inv, cutoffDate = null) {
+  if (balanceCategories.includes(inv.category)) {
+    if (cutoffDate && inv.date && new Date(inv.date) > cutoffDate) {
+      return { units: 0, costBasis: 0, currentValue: 0, realizedGain: 0 };
+    }
+    const accountTransactions = [...(inv.transactions || [])]
+      .filter(tx => !cutoffDate || new Date(tx.date) <= cutoffDate)
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    if (accountTransactions.length) {
+      let deposits = 0;
+      let interest = 0;
+      let withdrawals = 0;
+      let adjustments = 0;
+      for (const tx of accountTransactions) {
+        const amount = Number(tx.units || 0) * Number(tx.price || 0);
+        if (tx.action === 'DEPOSIT') deposits += amount;
+        if (tx.action === 'INTEREST') interest += amount;
+        if (tx.action === 'WITHDRAWAL') withdrawals += amount;
+        if (tx.action === 'ADJUSTMENT') adjustments += amount;
+      }
+      return {
+        units: 1,
+        costBasis: Math.max(0, deposits - withdrawals),
+        currentValue: deposits + interest - withdrawals + adjustments,
+        realizedGain: interest,
+        deposits,
+        interest,
+        withdrawals,
+        adjustments,
+      };
+    }
+    return {
+      units: 1,
+      costBasis: Number(inv.buyPrice || 0),
+      currentValue: Number(inv.currentPrice || 0),
+      realizedGain: 0,
+    };
+  }
+  let units = 0;
+  let costBasis = 0;
+  let realizedGain = 0;
+  const txns = [...(inv.transactions || [])]
+    .filter(tx => !cutoffDate || new Date(tx.date) <= cutoffDate)
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  for (const tx of txns) {
+    const quantity = Number(tx.units || 0);
+    const price = Number(tx.price || 0);
+    if (tx.action === 'BUY') {
+      units += quantity;
+      costBasis += quantity * price;
+    } else if (tx.action === 'SELL' && units > 0) {
+      const sold = Math.min(quantity, units);
+      const averageCost = costBasis / units;
+      realizedGain += sold * (price - averageCost);
+      units -= sold;
+      costBasis -= sold * averageCost;
+    }
+  }
+  if (!txns.length) {
+    units = Number(inv.units || 0);
+    costBasis = units * Number(inv.buyPrice || 0);
+  }
+  if (Math.abs(units) < 1e-9) units = 0;
+  if (Math.abs(costBasis) < 1e-6) costBasis = 0;
+  return {
+    units,
+    costBasis,
+    currentValue: units * Number(inv.currentPrice || 0),
+    realizedGain,
+  };
+}
+
+function portfolioTotals(items = investments) {
+  return items.reduce((totals, inv) => {
+    const metrics = investmentMetrics(inv);
+    totals.costBasis += metrics.costBasis;
+    totals.currentValue += metrics.currentValue;
+    totals.realizedGain += metrics.realizedGain;
+    return totals;
+  }, { costBasis: 0, currentValue: 0, realizedGain: 0 });
+}
 
 /* Build transaction log HTML for a holding */
 function buildTxnLog(inv) {
   const txns = inv.transactions || [];
   if (txns.length === 0) return '<div class="txn-empty">No transaction history.</div>';
+
+  if (balanceCategories.includes(inv.category)) {
+    const metrics = investmentMetrics(inv);
+    const rows = [...txns].sort((a, b) => String(b.date).localeCompare(String(a.date))).map(tx => {
+      const amount = Number(tx.units || 0) * Number(tx.price || 0);
+      const isOutflow = tx.action === 'WITHDRAWAL';
+      return `<tr>
+        <td>${fmtDate(tx.date)}</td>
+        <td><span class="txn-badge ${isOutflow ? 'txn-sell' : 'txn-buy'}">${escHtml(tx.action)}</span></td>
+        <td style="font-weight:600" class="${isOutflow ? 'gain-negative' : ''}">${isOutflow ? '-' : '+'}${fmt(amount)}</td>
+        <td>${escHtml(accountName(tx.accountId))}</td>
+      </tr>`;
+    }).join('');
+    return `
+      <table class="txn-table">
+        <thead><tr><th>Date</th><th>Type</th><th>Amount</th><th>Account</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="txn-summary">
+        ${txns.length} transactions · Deposited: ${fmt(metrics.deposits || 0)}
+        · Interest: ${fmt(metrics.interest || 0)} · Balance: ${fmt(metrics.currentValue)}
+      </div>`;
+  }
 
   let totalBought = 0, totalSold = 0, totalBuyCost = 0, totalSellRevenue = 0;
   txns.forEach(t => {
@@ -900,17 +1022,20 @@ function buildTxnLog(inv) {
       <td>${t.units}</td>
       <td>${fmt(t.price)}</td>
       <td style="font-weight:600">${fmt(total)}</td>
+      <td>${escHtml(accountName(t.accountId))}</td>
     </tr>`;
   }).join('');
 
   const summaryParts = [`${txns.length} transaction${txns.length !== 1 ? 's' : ''}`];
   if (totalBought > 0) summaryParts.push(`Bought: ${totalBought} units (${fmt(totalBuyCost)})`);
   if (totalSold > 0)   summaryParts.push(`Sold: ${totalSold} units (${fmt(totalSellRevenue)})`);
+  const realizedGain = investmentMetrics(inv).realizedGain;
+  if (totalSold > 0) summaryParts.push(`Realised P&L: ${realizedGain >= 0 ? '+' : ''}${fmt(realizedGain)}`);
   summaryParts.push(`Net: ${totalBought - totalSold} units held`);
 
   return `
     <table class="txn-table">
-      <thead><tr><th>Date</th><th>Action</th><th>Units</th><th>Price</th><th>Total</th></tr></thead>
+      <thead><tr><th>Date</th><th>Action</th><th>Units</th><th>Price</th><th>Total</th><th>Account</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
     <div class="txn-summary">${summaryParts.join('  ·  ')}</div>
@@ -934,15 +1059,17 @@ function buildMarketPanel(items) {
 
   return order.filter(k => subGroups[k]).map(cat => {
     const grp = subGroups[cat];
-    const grpInvested = grp.reduce((s, i) => s + i.units * i.buyPrice, 0);
-    const grpCurrent  = grp.reduce((s, i) => s + i.units * i.currentPrice, 0);
+    const grpTotals = portfolioTotals(grp);
+    const grpInvested = grpTotals.costBasis;
+    const grpCurrent = grpTotals.currentValue;
     const grpGain     = grpCurrent - grpInvested;
     const grpPct      = grpInvested > 0 ? (grpGain / grpInvested * 100).toFixed(1) : '0.0';
     const isPos       = grpGain >= 0;
 
     const rows = grp.map(inv => {
-      const invested   = inv.units * inv.buyPrice;
-      const currentVal = inv.units * inv.currentPrice;
+      const metrics = investmentMetrics(inv);
+      const invested = metrics.costBasis;
+      const currentVal = metrics.currentValue;
       const gain       = currentVal - invested;
       const gainPct    = invested > 0 ? (gain / invested * 100).toFixed(2) : '0.00';
       const isP        = gain >= 0;
@@ -1002,15 +1129,17 @@ function buildOtherPanel(items) {
 
   return order.filter(k => subGroups[k]).map(cat => {
     const grp = subGroups[cat];
-    const grpInvested = grp.reduce((s, i) => s + i.units * i.buyPrice, 0);
-    const grpCurrent  = grp.reduce((s, i) => s + i.units * i.currentPrice, 0);
+    const grpTotals = portfolioTotals(grp);
+    const grpInvested = grpTotals.costBasis;
+    const grpCurrent = grpTotals.currentValue;
     const grpGain     = grpCurrent - grpInvested;
     const grpPct      = grpInvested > 0 ? (grpGain / grpInvested * 100).toFixed(1) : '0.0';
     const isPos       = grpGain >= 0;
 
     const holdingCards = grp.map(inv => {
-      const invested   = inv.units * inv.buyPrice;
-      const currentVal = inv.units * inv.currentPrice;
+      const metrics = investmentMetrics(inv);
+      const invested = metrics.costBasis;
+      const currentVal = metrics.currentValue;
       const gain       = currentVal - invested;
       const gainPct    = invested > 0 ? (gain / invested * 100).toFixed(1) : '0.0';
       const isP        = gain >= 0;
@@ -1021,14 +1150,23 @@ function buildOtherPanel(items) {
             <div class="otile-name"><strong>${escHtml(inv.asset)}</strong><small>${escHtml(inv.name)}</small></div>
             <div class="otile-actions">
               ${txnCount > 0 ? '<span class="txn-count">📋' + txnCount + '</span>' : ''}
+              ${tradableCategories.includes(inv.category) ? `<button class="action-btn buy-btn" title="Buy More" data-id="${inv.id}">🛒</button><button class="action-btn sell-btn" title="Sell" data-id="${inv.id}">💰</button>` : ''}
+              ${balanceCategories.includes(inv.category) ? `<button class="action-btn balance-btn" title="Add account transaction" data-id="${inv.id}">➕</button>` : ''}
               <button class="action-btn delete" title="Delete" data-id="${inv.id}">🗑️</button>
             </div>
           </div>
           <div class="otile-stats">
-            <div><span>Units</span><strong>${inv.units}</strong></div>
-            <div><span>Invested</span><strong>${fmt(invested)}</strong></div>
-            <div><span>Current</span><strong>${fmt(currentVal)}</strong></div>
-            <div><span>P&L</span><strong class="${isP ? 'gain-positive' : 'gain-negative'}">${isP ? '+' : ''}${fmt(gain)} (${isP ? '+' : ''}${gainPct}%)</strong></div>
+            ${balanceCategories.includes(inv.category) ? `
+              <div><span>Deposited</span><strong>${fmt(metrics.deposits ?? invested)}</strong></div>
+              <div><span>Interest</span><strong class="gain-positive">${fmt(metrics.interest ?? gain)}</strong></div>
+              <div><span>Withdrawn</span><strong>${fmt(metrics.withdrawals || 0)}</strong></div>
+              <div><span>Current Balance</span><strong>${fmt(currentVal)}</strong></div>
+            ` : `
+              <div><span>Units</span><strong>${inv.units}</strong></div>
+              <div><span>Invested</span><strong>${fmt(invested)}</strong></div>
+              <div><span>Current</span><strong>${fmt(currentVal)}</strong></div>
+              <div><span>P&L</span><strong class="${isP ? 'gain-positive' : 'gain-negative'}">${isP ? '+' : ''}${fmt(gain)} (${isP ? '+' : ''}${gainPct}%)</strong></div>
+            `}
           </div>
           <div class="txn-expand-card" id="txn-card-${inv.id}">
             <div class="txn-log">${buildTxnLog(inv)}</div>
@@ -1049,8 +1187,9 @@ function buildOtherPanel(items) {
 
 /* Populate tile card stats */
 function updateTileCardStats(items, prefix) {
-  const invested = items.reduce((s, i) => s + i.units * i.buyPrice, 0);
-  const current  = items.reduce((s, i) => s + i.units * i.currentPrice, 0);
+  const totals = portfolioTotals(items);
+  const invested = totals.costBasis;
+  const current = totals.currentValue;
   const gain     = current - invested;
   const isPos    = gain >= 0;
 
@@ -1086,7 +1225,7 @@ function renderTilePills(items, containerId, labelMap) {
 
   const buckets = {};
   items.forEach(i => {
-    const val = i.units * i.currentPrice;
+    const val = investmentMetrics(i).currentValue;
     buckets[i.category] = (buckets[i.category] || 0) + val;
   });
 
@@ -1099,8 +1238,9 @@ function renderTilePills(items, containerId, labelMap) {
 
 /* Update the 4 summary cards dynamically */
 function updateInvestmentSummaryCards() {
-  const totalInvested = investments.reduce((s, i) => s + i.units * i.buyPrice, 0);
-  const totalCurrent  = investments.reduce((s, i) => s + i.units * i.currentPrice, 0);
+  const totals = portfolioTotals();
+  const totalInvested = totals.costBasis;
+  const totalCurrent = totals.currentValue;
   const totalGain     = totalCurrent - totalInvested;
   const overallReturn = totalInvested > 0 ? (totalGain / totalInvested * 100).toFixed(1) : '0.0';
 
@@ -1168,7 +1308,50 @@ function bindInvestmentActions(container) {
       openTradeModal('sell', inv);
     });
   });
+
+  container.querySelectorAll('.balance-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const inv = investments.find(x => x.id === Number(btn.dataset.id));
+      if (!inv) return;
+      const form = document.getElementById('accountTransactionForm');
+      form.dataset.invId = inv.id;
+      form.reset();
+      document.getElementById('accountTransactionName').textContent = inv.name;
+      document.getElementById('accountTransactionDate').value = todayISO();
+      document.getElementById('accountTransactionAccount').value =
+        String(defaultAccountId('investment') || '');
+      openModal('accountTransactionModal');
+    });
+  });
 }
+
+document.getElementById('accountTransactionForm')?.addEventListener('submit', event => {
+  event.preventDefault();
+  const inv = investments.find(x => x.id === Number(event.target.dataset.invId));
+  if (!inv) return;
+  const transaction = {
+    date: document.getElementById('accountTransactionDate').value,
+    action: document.getElementById('accountTransactionType').value,
+    units: 1,
+    price: Number(document.getElementById('accountTransactionAmount').value),
+    accountId: Number(document.getElementById('accountTransactionAccount').value) || null,
+  };
+  if (!transaction.date || !Number.isFinite(transaction.price) || transaction.price <= 0) return;
+  inv.transactions = inv.transactions || [];
+  inv.transactions.push(transaction);
+  const metrics = investmentMetrics(inv);
+  if (metrics.currentValue < 0) {
+    inv.transactions.pop();
+    alert('This transaction would make the account balance negative.');
+    return;
+  }
+  inv.units = 1;
+  inv.buyPrice = metrics.costBasis;
+  inv.currentPrice = metrics.currentValue;
+  saveInvestments();
+  renderAfterInvestmentChange();
+  closeModal('accountTransactionModal');
+});
 
 /* ============================================================
    TRADE MODAL (BUY / SELL)
@@ -1179,13 +1362,15 @@ function openTradeModal(action, inv) {
 
   document.getElementById('tradeAction').textContent = action === 'buy' ? 'Buy More' : 'Sell';
   document.getElementById('tradeAssetName').textContent = `${inv.asset} — ${inv.name}`;
-  document.getElementById('tradeCurrentUnits').textContent = inv.units;
-  document.getElementById('tradeCurrentValue').textContent = fmt(inv.units * inv.currentPrice);
+  const metrics = investmentMetrics(inv);
+  document.getElementById('tradeCurrentUnits').textContent = metrics.units;
+  document.getElementById('tradeCurrentValue').textContent = fmt(metrics.currentValue);
 
   const form = document.getElementById('tradeForm');
   form.dataset.action = action;
   form.dataset.invId  = inv.id;
   form.reset();
+  document.getElementById('tradeAccount').value = String(defaultAccountId('investment') || '');
 
   // Set max units for sell
   const unitsInput = document.getElementById('tradeUnits');
@@ -1209,25 +1394,19 @@ document.getElementById('tradeForm')?.addEventListener('submit', e => {
   const inv = investments.find(x => x.id === id);
   if (!inv) return;
 
-  if (action === 'buy') {
-    // Weighted average buy price
-    const totalOldCost = inv.units * inv.buyPrice;
-    const newCost      = units * price;
-    inv.units    = inv.units + units;
-    inv.buyPrice = (totalOldCost + newCost) / inv.units;
-  } else {
-    // Sell — reduce units
-    if (units > inv.units) { alert('Cannot sell more units than you hold.'); return; }
-    inv.units -= units;
-    if (inv.units <= 0) {
-      const idx = investments.findIndex(x => x.id === id);
-      if (idx !== -1) investments.splice(idx, 1);
-    }
+  const before = investmentMetrics(inv);
+  if (action === 'sell' && units > before.units) {
+    alert('Cannot sell more units than you hold.');
+    return;
   }
-
-  // Record the transaction
   if (!inv.transactions) inv.transactions = [];
-  inv.transactions.push({ date: todayISO(), action: action.toUpperCase(), units, price });
+  inv.transactions.push({
+    date: todayISO(), action: action.toUpperCase(), units, price,
+    accountId: Number(document.getElementById('tradeAccount').value) || null,
+  });
+  const after = investmentMetrics(inv);
+  inv.units = after.units;
+  inv.buyPrice = after.units > 0 ? after.costBasis / after.units : 0;
 
   saveInvestments();
   renderAfterInvestmentChange();
@@ -1320,11 +1499,12 @@ function renderSavingsTable() {
       const val = parseFloat(input);
       if (isNaN(val) || val < 0) return;
       row.income = val;
+      row.accountId = row.accountId || defaultAccountId('salary');
       if (serverAvailable) {
         fetch(`${API_BASE}/savings-history/${encodeURIComponent(row.month)}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ income: val }),
+          body: JSON.stringify({ income: val, accountId: row.accountId }),
         }).catch(e => console.error('Patch income failed:', e));
       }
       renderSavingsTable();
@@ -2207,7 +2387,7 @@ function investmentOutflowForYM(mIdx, yr) {
   let total = 0;
   investments.forEach(inv => {
     (inv.transactions || []).forEach(tx => {
-      if (tx.date && tx.date.startsWith(ym) && tx.action === 'BUY') {
+      if (tx.date && tx.date.startsWith(ym) && ['BUY', 'DEPOSIT'].includes(tx.action)) {
         total += tx.units * tx.price;
       }
     });
@@ -2217,14 +2397,12 @@ function investmentOutflowForYM(mIdx, yr) {
 
 function renderDashboardCards() {
   /* Investment current value */
-  const invValue = investments.reduce((s, i) => s + i.units * i.currentPrice, 0);
-
-  /* Emergency fund + savings goals current */
-  const efValue   = emergencyFund.current || 0;
-  const goalValue = savingsGoals.reduce((s, g) => s + g.current, 0);
-
-  /* Total Wealth = investments + emergency fund + goals */
-  const totalWealth = invValue + efValue + goalValue;
+  const invValue = portfolioTotals().currentValue;
+  const selectedSnapshot = netWorthHistory.find(
+    row => row.month === `${MONTHS[currentMonthIdx].slice(0, 3)} ${currentYear}`
+  );
+  const latestSnapshot = selectedSnapshot || netWorthHistory.at(-1);
+  const totalWealth = latestSnapshot ? netWorthValue(latestSnapshot) : invValue;
 
   /* Selected month data */
   const curRow  = savingsRowForMonth(currentMonthIdx, currentYear);
@@ -2253,7 +2431,7 @@ function renderDashboardCards() {
   el('dashExpenses', fmt(monthlyExpenses));
   el('dashSavings',  fmt(netSavings));
 
-  el('dashWealthChange',   `${invValue > 0 ? 'Portfolio ' + fmt(invValue) : ''}`);
+  el('dashWealthChange', latestSnapshot ? `Snapshot: ${latestSnapshot.month}` : 'Add a net-worth snapshot');
   cls('dashWealthChange',  'card-change positive');
 
   el('dashIncomeChange',   incChange >= 0 ? `+${fmt(incChange)} vs last month` : `${fmt(incChange)} vs last month`);
@@ -2282,15 +2460,21 @@ function renderDashboardCards() {
       const monthLabel = `${MONTHS[currentMonthIdx].slice(0, 3)} ${currentYear}`;
       if (row) {
         row.income = val;
+        row.accountId = row.accountId || defaultAccountId('salary');
       } else {
-        savingsHistory.push({ month: monthLabel, income: val });
+        savingsHistory.push({
+          month: monthLabel, income: val, accountId: defaultAccountId('salary'),
+        });
       }
       /* Save to server */
       if (serverAvailable) {
         fetch(`${API_BASE}/savings-history/${encodeURIComponent(monthLabel)}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ income: val }),
+          body: JSON.stringify({
+            income: val,
+            accountId: savingsRowForMonth(currentMonthIdx, currentYear)?.accountId || null,
+          }),
         }).catch(e => console.error('Patch income failed:', e));
       }
       refreshDashboard();
@@ -2334,6 +2518,9 @@ function initCharts() {
   /* ---- 1. Expense + Investment Breakdown (donut) — selected month ---- */
   const expCtx = document.getElementById('expenseChart')?.getContext('2d');
   if (expCtx) {
+    const periodLabel = `${MONTHS[currentMonthIdx]} ${currentYear}`;
+    const subtitleEl = document.getElementById('expenseChartSubtitle');
+    if (subtitleEl) subtitleEl.textContent = periodLabel;
     const monthExp = expensesForMonth();
     const catTotals = {};
     monthExp.forEach(e => { catTotals[e.category] = (catTotals[e.category] || 0) + e.amount; });
@@ -2354,15 +2541,24 @@ function initCharts() {
     const data   = Object.values(catTotals);
     const colors = keys.map((k, i) => colorMap[k] || PALETTE[i % PALETTE.length]);
     const total  = data.reduce((a, b) => a + b, 0);
+    const hasBreakdownData = total > 0;
 
     chartExpense = new Chart(expCtx, {
       type: 'doughnut',
-      data: { labels, datasets: [{ data, backgroundColor: colors, borderWidth: 2, borderColor: '#fff', hoverOffset: 6 }] },
+      data: {
+        labels: hasBreakdownData ? labels : ['No activity'],
+        datasets: [{
+          data: hasBreakdownData ? data : [1],
+          backgroundColor: hasBreakdownData ? colors : ['#e2e8f0'],
+          borderWidth: 2, borderColor: '#fff', hoverOffset: hasBreakdownData ? 6 : 0,
+        }],
+      },
       options: {
         responsive: true, maintainAspectRatio: false,
         plugins: {
           legend: { display: false },
           tooltip: {
+            enabled: hasBreakdownData,
             callbacks: {
               label: ctx => {
                 const pctOfTotal  = Math.round(ctx.raw / total * 100);
@@ -2379,7 +2575,9 @@ function initCharts() {
     // Custom legend with % of income
     const legendEl = document.getElementById('expenseLegend');
     if (legendEl) {
-      legendEl.innerHTML = keys.map((k, i) => {
+      if (!hasBreakdownData) {
+        legendEl.innerHTML = `<div class="chart-empty-message">No income or transactions recorded for ${periodLabel}. Click the Income card to add income.</div>`;
+      } else legendEl.innerHTML = keys.map((k, i) => {
         const lbl = labelMap[k] || k;
         const pct = income > 0 ? (catTotals[k] / income * 100).toFixed(1) : '—';
         return `<div class="legend-item">
@@ -2435,7 +2633,7 @@ function initCharts() {
   if (portCtx) {
     const typeTotals = {};
     investments.forEach(inv => {
-      const val = inv.units * inv.currentPrice;
+      const val = investmentMetrics(inv).currentValue;
       typeTotals[inv.category] = (typeTotals[inv.category] || 0) + val;
     });
     chartPortfolio = new Chart(portCtx, {
@@ -2470,17 +2668,9 @@ function initCharts() {
 
       let invested = 0, current = 0;
       investments.forEach(inv => {
-        let netUnits = 0, costBasis = 0;
-        (inv.transactions || []).forEach(tx => {
-          if (new Date(tx.date) <= cutoff) {
-            if (tx.action === 'BUY')  { netUnits += tx.units; costBasis += tx.units * tx.price; }
-            if (tx.action === 'SELL') { netUnits -= tx.units; costBasis -= tx.units * tx.price; }
-          }
-        });
-        if (netUnits > 0) {
-          invested += costBasis;
-          current  += netUnits * inv.currentPrice;
-        }
+        const metrics = investmentMetrics(inv, cutoff);
+        invested += metrics.costBasis;
+        current += metrics.currentValue;
       });
 
       monthLabels.push(label);
@@ -2610,99 +2800,37 @@ function initCharts() {
     });
   }
 
-  /* ---- 6. Wealth Accumulation (stacked area) ---- */
+  /* ---- 6. Net-worth history from actual saved snapshots ---- */
   const wealthCtx = document.getElementById('wealthChart')?.getContext('2d');
   if (wealthCtx) {
-    const wLabels = [], wInvData = [], wGoalsData = [], wEFData = [];
-    const now = new Date();
-    const curYM = now.getFullYear() * 12 + now.getMonth(); // current real month
-
-    for (let offset = 11; offset >= 0; offset--) {
-      let mI = currentMonthIdx - offset;
-      let yr = currentYear;
-      while (mI < 0) { mI += 12; yr--; }
-      const row = savingsRowForMonth(mI, yr);
-      if (!row) continue;
-
-      const cutoff = new Date(yr, mI + 1, 0);           // last day of this month
-      const thisYM = yr * 12 + mI;
-      const isCurrent = thisYM >= curYM;                 // current or future month
-
-      /* Investment value: cost basis for past months, current market value for current month */
-      let invVal = 0;
-      investments.forEach(inv => {
-        let netUnits = 0, costBasis = 0;
-        (inv.transactions || []).forEach(tx => {
-          if (new Date(tx.date) <= cutoff) {
-            if (tx.action === 'BUY')  { netUnits += tx.units; costBasis += tx.units * tx.price; }
-            if (tx.action === 'SELL') { netUnits -= tx.units; costBasis -= tx.units * tx.price; }
-          }
-        });
-        if (netUnits > 0) {
-          invVal += isCurrent ? (netUnits * inv.currentPrice) : costBasis;
-        }
-      });
-
-      /* Goals: scale linearly toward current value for past months */
-      const goalCurrent = savingsGoals.reduce((s, g) => s + g.current, 0);
-      const monthsFromNow = curYM - thisYM;
-      const progressFactor = monthsFromNow <= 0 ? 1 : Math.max(0.1, 1 - monthsFromNow * 0.07);
-      const goalVal = Math.round(goalCurrent * progressFactor);
-
-      /* Emergency Fund: use actual cumulative contributions */
-      const efVal = efBalanceUpTo(mI, yr);
-
-      wLabels.push(row.month.replace(' 20', " '"));
-      wInvData.push(invVal);
-      wGoalsData.push(goalVal);
-      wEFData.push(efVal);
-    }
+    const snapshots = [...netWorthHistory].slice(-12);
+    const wLabels = snapshots.map(row => String(row.month).replace(' 20', " '"));
+    const wNetWorthData = snapshots.map(netWorthValue);
 
     chartWealth = new Chart(wealthCtx, {
       type: 'line',
       data: {
         labels: wLabels,
-        datasets: [
-          {
-            label: 'Investments', data: wInvData,
-            borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.25)',
-            fill: 'origin', tension: 0.4, pointRadius: 3, borderWidth: 2, order: 3,
-          },
-          {
-            label: 'Savings Goals', data: wGoalsData,
-            borderColor: '#6366f1', backgroundColor: 'rgba(99,102,241,0.2)',
-            fill: '-1', tension: 0.4, pointRadius: 3, borderWidth: 2, order: 2,
-          },
-          {
-            label: 'Emergency Fund', data: wEFData,
-            borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.2)',
-            fill: '-1', tension: 0.4, pointRadius: 3, borderWidth: 2, order: 1,
-          },
-        ],
+        datasets: [{
+          label: 'Net Worth', data: wNetWorthData,
+          borderColor: '#6366f1', backgroundColor: 'rgba(99,102,241,0.15)',
+          fill: true, tension: 0.35, pointRadius: 4, borderWidth: 2,
+        }],
       },
       options: {
         responsive: true, maintainAspectRatio: false,
         interaction: { mode: 'index', intersect: false },
         plugins: {
-          legend: { position: 'top', labels: { font: { size: 11 }, boxWidth: 14, usePointStyle: true } },
+          legend: { display: false },
           tooltip: {
-            callbacks: {
-              label: ctx => ` ${ctx.dataset.label}: ${fmt(ctx.raw)}`,
-              afterBody(items) {
-                const idx = items[0]?.dataIndex;
-                if (idx == null) return '';
-                const total = wInvData[idx] + wGoalsData[idx] + wEFData[idx];
-                return `\n  Total Wealth: ${fmt(total)}`;
-              },
-            },
+            callbacks: { label: ctx => ` Net Worth: ${fmt(ctx.raw)}` },
           },
         },
         scales: {
           y: {
-            stacked: true,
             grid: { color: '#f1f5f9' },
             ticks: { callback: v => '₹' + (v / 1000).toFixed(0) + 'k' },
-            title: { display: true, text: 'Wealth (₹)', font: { size: 11 } },
+            title: { display: true, text: 'Net Worth (₹)', font: { size: 11 } },
           },
           x: { grid: { display: false } },
         },
@@ -2866,6 +2994,580 @@ function renderExpenseCategoryBreakdown() {
 
 
 /* ============================================================
+   FINANCIAL PLANNING
+   ============================================================ */
+function planningMonthKey(mIdx = currentMonthIdx, yr = currentYear) {
+  return `${MONTHS[mIdx].slice(0, 3)} ${yr}`;
+}
+
+function activeAccounts() {
+  return accounts.filter(row => row.active !== false && String(row.active).toLowerCase() !== 'false');
+}
+
+function defaultAccountId(purpose) {
+  return activeAccounts().find(row => row.purpose === purpose)?.id || null;
+}
+
+function accountName(accountId) {
+  return accounts.find(row => Number(row.id) === Number(accountId))?.name || 'Unassigned';
+}
+
+function populateAccountSelectors() {
+  const configs = {
+    expAccount: 'spending',
+    invAccount: 'investment',
+    tradeAccount: 'investment',
+    accountTransactionAccount: 'investment',
+    transferFrom: null,
+    transferTo: null,
+  };
+  Object.entries(configs).forEach(([id, preferredPurpose]) => {
+    const select = document.getElementById(id);
+    if (!select) return;
+    const previous = select.value;
+    const placeholder = id.startsWith('transfer')
+      ? (id === 'transferFrom' ? 'From account' : 'To account')
+      : (id === 'expAccount' ? 'Select paying account'
+        : id === 'tradeAccount' ? 'Select settlement account'
+          : 'Select funding account');
+    select.innerHTML = `<option value="">${placeholder}</option>` + activeAccounts()
+      .map(row => `<option value="${row.id}">${escHtml(row.name)}${row.bank ? ` · ${escHtml(row.bank)}` : ''}</option>`)
+      .join('');
+    const preferred = previous || defaultAccountId(preferredPurpose);
+    if (preferred) select.value = String(preferred);
+  });
+}
+
+function trackedAccountBalance(account) {
+  const id = Number(account.id);
+  let balance = Number(account.openingBalance || 0);
+  savingsHistory.forEach(row => {
+    if (Number(row.accountId) === id) balance += Number(row.income || 0);
+  });
+  expenses.forEach(row => {
+    if (Number(row.accountId) === id) balance -= Number(row.amount || 0);
+  });
+  transfers.forEach(row => {
+    if (Number(row.fromAccountId) === id) balance -= Number(row.amount || 0);
+    if (Number(row.toAccountId) === id) balance += Number(row.amount || 0);
+  });
+  investments.forEach(inv => (inv.transactions || []).forEach(tx => {
+    if (Number(tx.accountId) !== id) return;
+    const amount = Number(tx.units || 0) * Number(tx.price || 0);
+    if (['BUY', 'DEPOSIT'].includes(tx.action)) balance -= amount;
+    if (['SELL', 'WITHDRAWAL'].includes(tx.action)) balance += amount;
+  }));
+  return balance;
+}
+
+function accountLedgerEntries(accountId) {
+  const id = Number(accountId);
+  const entries = [];
+  savingsHistory.forEach(row => {
+    if (Number(row.accountId) === id && Number(row.income || 0) !== 0) {
+      entries.push({
+        date: monthKeyToISO(row.month),
+        type: 'Income',
+        description: 'Monthly income',
+        amount: Number(row.income || 0),
+      });
+    }
+  });
+  expenses.forEach(row => {
+    if (Number(row.accountId) === id) {
+      entries.push({
+        date: row.date,
+        type: 'Expense',
+        description: row.description || row.category || 'Expense',
+        amount: -Number(row.amount || 0),
+      });
+    }
+  });
+  transfers.forEach(row => {
+    if (Number(row.fromAccountId) === id) {
+      entries.push({
+        date: row.date,
+        type: 'Transfer out',
+        description: `To ${accountName(row.toAccountId)}${row.note ? ` · ${row.note}` : ''}`,
+        amount: -Number(row.amount || 0),
+      });
+    }
+    if (Number(row.toAccountId) === id) {
+      entries.push({
+        date: row.date,
+        type: 'Transfer in',
+        description: `From ${accountName(row.fromAccountId)}${row.note ? ` · ${row.note}` : ''}`,
+        amount: Number(row.amount || 0),
+      });
+    }
+  });
+  investments.forEach(inv => (inv.transactions || []).forEach(tx => {
+    if (Number(tx.accountId) !== id) return;
+    const amount = Number(tx.units || 0) * Number(tx.price || 0);
+    if (['BUY', 'DEPOSIT'].includes(tx.action)) {
+      entries.push({
+        date: tx.date,
+        type: 'Investment',
+        description: `${tx.action === 'BUY' ? 'Bought' : 'Deposited to'} ${inv.name || inv.asset}`,
+        amount: -amount,
+      });
+    }
+    if (['SELL', 'WITHDRAWAL'].includes(tx.action)) {
+      entries.push({
+        date: tx.date,
+        type: 'Investment return',
+        description: `${tx.action === 'SELL' ? 'Sold' : 'Withdrew from'} ${inv.name || inv.asset}`,
+        amount,
+      });
+    }
+  }));
+  return entries.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+}
+
+function monthKeyToISO(month) {
+  const match = String(month || '').match(/^([A-Za-z]{3})\s+(\d{4})$/);
+  if (!match) return '';
+  const monthIndex = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].indexOf(match[1]);
+  return monthIndex < 0 ? '' : `${match[2]}-${String(monthIndex + 1).padStart(2, '0')}-01`;
+}
+
+function numericValue(id) {
+  return Number(document.getElementById(id)?.value || 0);
+}
+
+function currentBudgetRows() {
+  const key = planningMonthKey();
+  return budgets.filter(row => row.month === key);
+}
+
+function currentCashFlowRow() {
+  return cashFlowSettings.find(row => row.month === planningMonthKey()) || null;
+}
+
+function netWorthValue(row) {
+  if (!row) return 0;
+  const assets = ['cash', 'bank', 'investments', 'retirement', 'otherAssets']
+    .reduce((sum, key) => sum + Number(row[key] || 0), 0);
+  const liabilities = ['loans', 'creditCards', 'otherLiabilities']
+    .reduce((sum, key) => sum + Number(row[key] || 0), 0);
+  return assets - liabilities;
+}
+
+function planningMetrics() {
+  const rows = currentBudgetRows();
+  const budgetTotal = rows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const spent = expensesForMonth().reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const today = new Date();
+  const isCurrentCalendarMonth = currentMonthIdx === today.getMonth() && currentYear === today.getFullYear();
+  const fromDay = isCurrentCalendarMonth ? today.getDate() : 1;
+  const upcomingBills = recurringBills.filter(bill =>
+    bill.active !== false && String(bill.active).toLowerCase() !== 'false' &&
+    Number(bill.dueDay || 0) >= fromDay
+  );
+  const upcomingBillTotal = upcomingBills
+    .filter(bill => bill.includedInBudget !== true && String(bill.includedInBudget).toLowerCase() !== 'true')
+    .reduce((sum, bill) => sum + Number(bill.amount || 0), 0);
+  const flow = currentCashFlowRow();
+  const income = savingsRowForMonth(currentMonthIdx, currentYear)?.income || 0;
+  const remainingBudget = Math.max(0, budgetTotal - spent);
+  const forecast = flow
+    ? Number(flow.openingBalance || 0) + Number(income) + Number(flow.otherIncome || 0)
+      - remainingBudget - upcomingBillTotal
+    : 0;
+  const latestSnapshot = netWorthHistory.at(-1);
+  const essentialCategories = new Set(['food', 'grocery', 'travel', 'housing', 'health', 'utilities']);
+  let essentialTotal = 0;
+  for (let offset = 0; offset < 3; offset++) {
+    const date = new Date(currentYear, currentMonthIdx - offset, 1);
+    essentialTotal += expensesForYM(date.getMonth(), date.getFullYear())
+      .filter(row => essentialCategories.has(row.category))
+      .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  }
+  const essentialMonthlyAverage = essentialTotal / 3;
+  const emergencyCoverage = essentialMonthlyAverage > 0
+    ? Number(emergencyFund.current || 0) / essentialMonthlyAverage
+    : null;
+  return {
+    rows, budgetTotal, spent, upcomingBills, upcomingBillTotal,
+    remainingBudget, flow, forecast, latestSnapshot,
+    netWorth: netWorthValue(latestSnapshot),
+    emergencyCoverage,
+  };
+}
+
+function renderFinancialSummary() {
+  const text = document.getElementById('financialSummaryText');
+  if (!text) return;
+  const metrics = planningMetrics();
+  const income = savingsRowForMonth(currentMonthIdx, currentYear)?.income || 0;
+  const savings = income - metrics.spent
+    - investmentOutflowForYM(currentMonthIdx, currentYear)
+    - efContribForYM(currentMonthIdx, currentYear);
+  const savingsRate = income > 0 ? savings / income * 100 : 0;
+  const prevM = currentMonthIdx === 0 ? 11 : currentMonthIdx - 1;
+  const prevY = currentMonthIdx === 0 ? currentYear - 1 : currentYear;
+  const previousSpend = expensesForYM(prevM, prevY).reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const change = previousSpend > 0 ? (metrics.spent - previousSpend) / previousSpend * 100 : null;
+
+  const messages = [];
+  if (!income && !metrics.spent && !metrics.budgetTotal) {
+    messages.push(`No financial activity is recorded for ${planningMonthKey()}.`);
+  } else {
+    if (income > 0) messages.push(`Your savings rate is ${savingsRate.toFixed(1)}%.`);
+    if (change !== null) {
+      messages.push(`Spending is ${Math.abs(change).toFixed(0)}% ${change > 0 ? 'higher' : 'lower'} than last month.`);
+    }
+    if (metrics.budgetTotal > 0) {
+      const used = metrics.spent / metrics.budgetTotal * 100;
+      messages.push(used > 100
+        ? `You are ${fmt(metrics.spent - metrics.budgetTotal)} over budget.`
+        : `${fmt(metrics.remainingBudget)} remains in your monthly budget.`);
+    }
+    if (metrics.upcomingBills.length) {
+      messages.push(`${metrics.upcomingBills.length} upcoming bill${metrics.upcomingBills.length > 1 ? 's' : ''} total ${fmt(metrics.upcomingBillTotal)}.`);
+    }
+    if (metrics.flow && metrics.forecast < Number(metrics.flow.safetyBalance || 0)) {
+      messages.push(`Your forecast balance is below your safety level.`);
+    }
+  }
+  text.textContent = messages.join(' ');
+}
+
+function renderPlanning() {
+  const metrics = planningMetrics();
+  const setText = (id, value) => {
+    const node = document.getElementById(id);
+    if (node) node.textContent = value;
+  };
+  setText('planBudgetUsed', metrics.budgetTotal > 0 ? `${(metrics.spent / metrics.budgetTotal * 100).toFixed(0)}%` : 'Not set');
+  setText('planUpcomingBills', fmt(metrics.upcomingBillTotal));
+  setText('planNetWorth', fmt(metrics.netWorth));
+  setText('planForecast', metrics.flow ? fmt(metrics.forecast) : 'Not set');
+  setText('planEmergencyCoverage', metrics.emergencyCoverage === null
+    ? 'Not set'
+    : `${metrics.emergencyCoverage.toFixed(1)} months`);
+  populateAccountSelectors();
+
+  const ledgerSelect = document.getElementById('ledgerAccountSelect');
+  if (ledgerSelect) {
+    const previous = ledgerSelect.value;
+    ledgerSelect.innerHTML = activeAccounts()
+      .map(row => `<option value="${row.id}">${escHtml(row.name)}</option>`).join('');
+    const selectedId = activeAccounts().some(row => String(row.id) === previous)
+      ? previous
+      : String(defaultAccountId('investment') || activeAccounts()[0]?.id || '');
+    ledgerSelect.value = selectedId;
+    renderAccountLedger(selectedId);
+  }
+
+  const accountList = document.getElementById('accountList');
+  if (accountList) {
+    accountList.innerHTML = activeAccounts().length ? activeAccounts().map(account => {
+      const tracked = trackedAccountBalance(account);
+      const statement = Number(account.statementBalance || 0);
+      const difference = statement - tracked;
+      return `<div class="planning-row">
+        <div class="planning-row-main">
+          <strong>${escHtml(account.name)}</strong>
+          <span>${escHtml(account.bank || 'Bank not specified')} · ${escHtml(account.purpose)}</span>
+        </div>
+        <div class="account-balance-line">
+          <span>Tracked <strong>${fmt(tracked)}</strong></span>
+          <span>Bank balance <strong>${fmt(statement)}</strong></span>
+          <span class="${Math.abs(difference) < 0.01 ? 'gain-positive' : 'forecast-warning'}">Difference <strong>${fmt(difference)}</strong></span>
+        </div>
+        <button class="action-btn balance-btn" data-account-balance="${account.id}" title="Update bank balance">✏️</button>
+        <button class="planning-delete" data-account-id="${account.id}" title="Remove account">×</button>
+      </div>`;
+    }).join('') : '<p class="planning-empty">No accounts configured. Add labels such as Salary, Investment, and Spending.</p>';
+  }
+
+  const transferList = document.getElementById('transferList');
+  if (transferList) {
+    const recentTransfers = [...transfers].sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 10);
+    transferList.innerHTML = recentTransfers.length ? recentTransfers.map(row => `
+      <div class="planning-row simple">
+        <div><strong>${escHtml(accountName(row.fromAccountId))} → ${escHtml(accountName(row.toAccountId))}</strong>
+          <span>${fmtDate(row.date)}${row.note ? ` · ${escHtml(row.note)}` : ''}</span></div>
+        <strong>${fmt(Number(row.amount || 0))}</strong>
+        <button class="planning-delete" data-transfer-id="${row.id}" title="Remove transfer">×</button>
+      </div>`).join('') : '<p class="planning-empty">No internal transfers recorded.</p>';
+  }
+
+  const budgetList = document.getElementById('budgetList');
+  if (budgetList) {
+    budgetList.innerHTML = metrics.rows.length ? metrics.rows.map(row => {
+      const spent = expensesForMonth().filter(e => e.category === row.category)
+        .reduce((sum, e) => sum + Number(e.amount || 0), 0);
+      const amount = Number(row.amount || 0);
+      const pct = amount > 0 ? Math.min(100, spent / amount * 100) : 0;
+      return `<div class="planning-row">
+        <div class="planning-row-main"><strong>${categoryConfig[row.category]?.label || row.category}</strong><span>${fmt(spent)} of ${fmt(amount)}</span></div>
+        <div class="budget-progress"><span style="width:${pct}%;background:${spent > amount ? '#ef4444' : pct >= 80 ? '#f59e0b' : '#10b981'}"></span></div>
+        <button class="planning-delete" data-budget-category="${row.category}" title="Remove budget">×</button>
+      </div>`;
+    }).join('') : '<p class="planning-empty">No budgets set for this month.</p>';
+  }
+
+  const billList = document.getElementById('billList');
+  if (billList) {
+    const activeBills = recurringBills.filter(row => row.active !== false && String(row.active).toLowerCase() !== 'false');
+    billList.innerHTML = activeBills.length ? activeBills
+      .sort((a, b) => Number(a.dueDay) - Number(b.dueDay))
+      .map(row => `<div class="planning-row simple">
+        <div><strong>${escHtml(String(row.name || 'Bill'))}</strong><span>Due day ${Number(row.dueDay)} · ${row.category}${row.includedInBudget === true || String(row.includedInBudget).toLowerCase() === 'true' ? ' · covered by budget' : ''}</span></div>
+        <strong>${fmt(Number(row.amount || 0))}</strong>
+        <button class="planning-delete" data-bill-id="${row.id}" title="Remove bill">×</button>
+      </div>`).join('') : '<p class="planning-empty">No recurring bills configured.</p>';
+  }
+
+  const history = document.getElementById('netWorthHistory');
+  if (history) {
+    const recent = [...netWorthHistory].slice(-6).reverse();
+    history.innerHTML = recent.length ? recent.map(row => `<div class="planning-row simple">
+      <span>${row.month}</span><strong>${fmt(netWorthValue(row))}</strong>
+    </div>`).join('') : '<p class="planning-empty">No net-worth snapshots yet.</p>';
+  }
+
+  const forecast = document.getElementById('cashFlowForecast');
+  if (forecast) {
+    forecast.innerHTML = metrics.flow ? `
+      <div class="forecast-equation">
+        <span>Opening cash <strong>${fmt(Number(metrics.flow.openingBalance || 0))}</strong></span>
+        <span>Income + other <strong>+${fmt(Number(savingsRowForMonth(currentMonthIdx, currentYear)?.income || 0) + Number(metrics.flow.otherIncome || 0))}</strong></span>
+        <span>Remaining budget <strong>-${fmt(metrics.remainingBudget)}</strong></span>
+        <span>Upcoming bills <strong>-${fmt(metrics.upcomingBillTotal)}</strong></span>
+        <span class="${metrics.forecast < Number(metrics.flow.safetyBalance || 0) ? 'forecast-warning' : 'forecast-good'}">Projected balance <strong>${fmt(metrics.forecast)}</strong></span>
+      </div>` : '<p class="planning-empty">Enter opening cash to create this month’s forecast.</p>';
+  }
+
+  const netWorthForm = document.getElementById('netWorthForm');
+  const monthSnapshot = netWorthHistory.find(row => row.month === planningMonthKey());
+  if (netWorthForm && !netWorthForm.contains(document.activeElement)) {
+    const snapshotInputs = {
+      nwCash: 'cash', nwBank: 'bank', nwInvestments: 'investments',
+      nwRetirement: 'retirement', nwOtherAssets: 'otherAssets', nwLoans: 'loans',
+      nwCards: 'creditCards', nwOtherLiabilities: 'otherLiabilities',
+    };
+    Object.entries(snapshotInputs).forEach(([id, key]) => {
+      const input = document.getElementById(id);
+      if (input) input.value = monthSnapshot?.[key] || '';
+    });
+  }
+  const cashForm = document.getElementById('cashFlowForm');
+  if (cashForm && !cashForm.contains(document.activeElement)) {
+    const fields = { cfOpening: 'openingBalance', cfOtherIncome: 'otherIncome', cfSafety: 'safetyBalance' };
+    Object.entries(fields).forEach(([id, key]) => {
+      const input = document.getElementById(id);
+      if (input) input.value = metrics.flow?.[key] || '';
+    });
+  }
+  renderFinancialSummary();
+}
+
+function renderAccountLedger(accountId) {
+  const account = accounts.find(row => Number(row.id) === Number(accountId));
+  const summary = document.getElementById('accountLedgerSummary');
+  const list = document.getElementById('accountLedgerList');
+  if (!summary || !list) return;
+  if (!account) {
+    summary.innerHTML = '';
+    list.innerHTML = '<p class="planning-empty">Add an account to see its connected cash flow.</p>';
+    return;
+  }
+  const entries = accountLedgerEntries(account.id);
+  const credits = entries.filter(row => row.amount > 0).reduce((sum, row) => sum + row.amount, 0);
+  const debits = entries.filter(row => row.amount < 0).reduce((sum, row) => sum - row.amount, 0);
+  summary.innerHTML = `
+    <span>Opening <strong>${fmt(Number(account.openingBalance || 0))}</strong></span>
+    <span>Money in <strong class="gain-positive">+${fmt(credits)}</strong></span>
+    <span>Money out <strong class="gain-negative">-${fmt(debits)}</strong></span>
+    <span>Tracked balance <strong>${fmt(trackedAccountBalance(account))}</strong></span>`;
+  list.innerHTML = entries.length ? entries.slice(0, 100).map(row => `
+    <div class="planning-row simple">
+      <div><strong>${escHtml(row.type)}</strong>
+        <span>${fmtDate(row.date)} · ${escHtml(row.description)}</span></div>
+      <strong class="${row.amount >= 0 ? 'gain-positive' : 'gain-negative'}">${row.amount >= 0 ? '+' : '-'}${fmt(Math.abs(row.amount))}</strong>
+    </div>`).join('') : '<p class="planning-empty">No linked transactions for this account.</p>';
+}
+
+function initPlanningEvents() {
+  document.getElementById('ledgerAccountSelect')?.addEventListener('change', event => {
+    renderAccountLedger(event.target.value);
+  });
+  document.getElementById('accountForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    accounts.push({
+      id: Math.max(0, ...accounts.map(row => Number(row.id || 0))) + 1,
+      name: document.getElementById('accountName').value.trim(),
+      bank: document.getElementById('accountBank').value.trim(),
+      purpose: document.getElementById('accountPurpose').value,
+      openingBalance: numericValue('accountOpeningBalance'),
+      statementBalance: numericValue('accountStatementBalance'),
+      includeNetWorth: true,
+      active: true,
+    });
+    await saveAccounts();
+    event.target.reset();
+    renderPlanning();
+  });
+
+  document.getElementById('transferForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const fromAccountId = Number(document.getElementById('transferFrom').value);
+    const toAccountId = Number(document.getElementById('transferTo').value);
+    const amount = numericValue('transferAmount');
+    if (!fromAccountId || !toAccountId || fromAccountId === toAccountId || amount <= 0) {
+      alert('Choose two different accounts and enter a positive amount.');
+      return;
+    }
+    transfers.push({
+      id: Math.max(0, ...transfers.map(row => Number(row.id || 0))) + 1,
+      date: document.getElementById('transferDate').value,
+      fromAccountId,
+      toAccountId,
+      amount,
+      note: document.getElementById('transferNote').value.trim(),
+    });
+    await saveTransfers();
+    event.target.reset();
+    document.getElementById('transferDate').value = todayISO();
+    renderPlanning();
+  });
+
+  document.getElementById('budgetForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const category = document.getElementById('budgetCategory').value;
+    const amount = numericValue('budgetAmount');
+    if (!category || amount <= 0) return;
+    const month = planningMonthKey();
+    const existing = budgets.find(row => row.month === month && row.category === category);
+    if (existing) existing.amount = amount;
+    else budgets.push({ month, category, amount });
+    await saveBudgets();
+    event.target.reset();
+    renderPlanning();
+  });
+
+  document.getElementById('billForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    recurringBills.push({
+      id: Math.max(0, ...recurringBills.map(row => Number(row.id || 0))) + 1,
+      name: document.getElementById('billName').value.trim(),
+      category: document.getElementById('billCategory').value,
+      amount: numericValue('billAmount'),
+      dueDay: numericValue('billDueDay'),
+      frequency: 'monthly',
+      active: true,
+      includedInBudget: document.getElementById('billIncludedInBudget').checked,
+    });
+    await saveRecurringBills();
+    event.target.reset();
+    renderPlanning();
+  });
+
+  document.getElementById('netWorthForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const snapshot = {
+      month: planningMonthKey(), cash: numericValue('nwCash'), bank: numericValue('nwBank'),
+      investments: numericValue('nwInvestments'), retirement: numericValue('nwRetirement'),
+      otherAssets: numericValue('nwOtherAssets'), loans: numericValue('nwLoans'),
+      creditCards: numericValue('nwCards'), otherLiabilities: numericValue('nwOtherLiabilities'),
+    };
+    const index = netWorthHistory.findIndex(row => row.month === snapshot.month);
+    if (index >= 0) netWorthHistory[index] = snapshot;
+    else netWorthHistory.push(snapshot);
+    await saveNetWorth();
+    renderPlanning();
+  });
+
+  document.getElementById('cashFlowForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const row = {
+      month: planningMonthKey(), openingBalance: numericValue('cfOpening'),
+      otherIncome: numericValue('cfOtherIncome'), safetyBalance: numericValue('cfSafety'),
+    };
+    const index = cashFlowSettings.findIndex(item => item.month === row.month);
+    if (index >= 0) cashFlowSettings[index] = row;
+    else cashFlowSettings.push(row);
+    await saveCashFlow();
+    renderPlanning();
+  });
+
+  document.getElementById('budgetList')?.addEventListener('click', async event => {
+    const category = event.target.dataset.budgetCategory;
+    if (!category) return;
+    budgets = budgets.filter(row => !(row.month === planningMonthKey() && row.category === category));
+    await saveBudgets();
+    renderPlanning();
+  });
+
+  document.getElementById('copyPreviousBudgetBtn')?.addEventListener('click', async () => {
+    let previousMonth = currentMonthIdx - 1;
+    let previousYear = currentYear;
+    if (previousMonth < 0) { previousMonth = 11; previousYear--; }
+    const previousKey = planningMonthKey(previousMonth, previousYear);
+    const currentKey = planningMonthKey();
+    const previousRows = budgets.filter(row => row.month === previousKey);
+    if (!previousRows.length) {
+      alert(`No budgets found for ${previousKey}.`);
+      return;
+    }
+    budgets = budgets.filter(row => row.month !== currentKey);
+    budgets.push(...previousRows.map(row => ({ ...row, month: currentKey })));
+    await saveBudgets();
+    renderPlanning();
+  });
+
+  document.getElementById('billList')?.addEventListener('click', async event => {
+    const id = Number(event.target.dataset.billId);
+    if (!id) return;
+    recurringBills = recurringBills.filter(row => Number(row.id) !== id);
+    await saveRecurringBills();
+    renderPlanning();
+  });
+
+  document.getElementById('accountList')?.addEventListener('click', async event => {
+    const balanceId = Number(event.target.dataset.accountBalance);
+    if (balanceId) {
+      const account = accounts.find(row => Number(row.id) === balanceId);
+      if (!account) return;
+      const input = prompt(`Latest bank balance for ${account.name}:`, account.statementBalance || 0);
+      if (input === null) return;
+      const value = Number(input);
+      if (!Number.isFinite(value)) return;
+      account.statementBalance = value;
+      await saveAccounts();
+      renderPlanning();
+      return;
+    }
+    const id = Number(event.target.dataset.accountId);
+    if (!id) return;
+    const referenced = expenses.some(row => Number(row.accountId) === id)
+      || savingsHistory.some(row => Number(row.accountId) === id)
+      || transfers.some(row => Number(row.fromAccountId) === id || Number(row.toAccountId) === id)
+      || investments.some(inv => (inv.transactions || []).some(tx => Number(tx.accountId) === id));
+    if (referenced) {
+      alert('This account is used by existing records. Reassign them before removing it.');
+      return;
+    }
+    accounts = accounts.filter(row => Number(row.id) !== id);
+    await saveAccounts();
+    renderPlanning();
+  });
+
+  document.getElementById('transferList')?.addEventListener('click', async event => {
+    const id = Number(event.target.dataset.transferId);
+    if (!id) return;
+    transfers = transfers.filter(row => Number(row.id) !== id);
+    await saveTransfers();
+    renderPlanning();
+  });
+}
+
+
+/* ============================================================
    MONTH NAVIGATION
    ============================================================ */
 const MONTHS = ['January','February','March','April','May','June',
@@ -2909,6 +3611,7 @@ function refreshDashboard() {
   renderSavingsCards();
   renderSavingsTable();
   renderExpensesTable();
+  renderPlanning();
   initCharts();
 }
 
@@ -2943,6 +3646,7 @@ document.getElementById('expenseForm')?.addEventListener('submit', e => {
       exp.category    = form.category.value;
       exp.payment     = form.payment.value;
       exp.amount      = parseFloat(form.amount.value);
+      exp.accountId   = Number(form.accountId.value) || null;
     }
   } else {
     // Add mode — create new expense
@@ -2953,6 +3657,7 @@ document.getElementById('expenseForm')?.addEventListener('submit', e => {
       category:    form.category.value,
       payment:     form.payment.value,
       amount:      parseFloat(form.amount.value),
+      accountId:   Number(form.accountId.value) || null,
     });
   }
   saveExpenses();
@@ -2969,7 +3674,7 @@ document.getElementById('investmentForm')?.addEventListener('submit', e => {
     asset:        form.asset.value.trim().toUpperCase(),
     name:         form.querySelector('#invName').value.trim() || form.asset.value.trim(),
     category:     cat,
-    units:        parseFloat(form.units.value),
+    units:        balanceCategories.includes(cat) ? 1 : parseFloat(form.units.value),
     buyPrice:     parseFloat(form.buyPrice.value),
     currentPrice: parseFloat(form.currentPrice.value),
     date:         form.date.value,
@@ -2988,7 +3693,24 @@ document.getElementById('investmentForm')?.addEventListener('submit', e => {
   const scheme = form.querySelector('#invSchemeCode')?.value.trim();
   if (scheme) inv.schemeCode = scheme;
 
-  inv.transactions = [{ date: inv.date, action: 'BUY', units: inv.units, price: inv.buyPrice }];
+  if (balanceCategories.includes(cat)) {
+    const accountId = Number(document.getElementById('invAccount').value) || null;
+    inv.transactions = [{
+      date: inv.date, action: 'DEPOSIT', units: 1, price: inv.buyPrice, accountId,
+    }];
+    const initialInterest = inv.currentPrice - inv.buyPrice;
+    if (initialInterest > 0) {
+      inv.transactions.push({
+        date: inv.date, action: 'INTEREST', units: 1, price: initialInterest,
+        accountId: null,
+      });
+    }
+  } else {
+    inv.transactions = [{
+      date: inv.date, action: 'BUY', units: inv.units, price: inv.buyPrice,
+      accountId: Number(document.getElementById('invAccount').value) || null,
+    }];
+  }
   investments.push(inv);
   saveInvestments();
   renderAfterInvestmentChange();
@@ -3028,6 +3750,8 @@ document.getElementById('emergencyFundForm')?.addEventListener('submit', e => {
   saveEmergencyFund();
   renderEmergencyFund();
   renderDashboardCards();
+  renderPlanning();
+  initPlanningEvents();
   initCharts();
   closeModal('emergencyFundModal');
 });
@@ -3338,7 +4062,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const today = todayISO();
   document.querySelectorAll('input[type="date"]').forEach(el => { el.value = today; });
 
-  // Load data from server (or fall back to mocks)
+  // Load data from the local server
   await loadAllData();
 
   // Show server status badge
@@ -3369,6 +4093,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // Render all data
+  populateAccountSelectors();
   renderRecentTransactions();
   renderInvestmentSnapshot();
   renderExpensesTable();

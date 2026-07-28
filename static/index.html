@@ -47,6 +47,12 @@
           </a>
         </li>
         <li>
+          <a href="#" class="nav-item" data-section="planning">
+            <span class="nav-icon">🧭</span>
+            <span class="nav-label">Financial Plan</span>
+          </a>
+        </li>
+        <li>
           <a href="#" class="nav-item" data-section="documents">
             <span class="nav-icon">📁</span>
             <span class="nav-label">Documents</span>
@@ -99,7 +105,7 @@
         <div class="summary-card wealth">
           <div class="card-icon">💼</div>
           <div class="card-content">
-            <span class="card-label">Total Wealth</span>
+            <span class="card-label">Net Worth</span>
             <span class="card-value" id="dashWealth">₹0</span>
             <span class="card-change" id="dashWealthChange"></span>
           </div>
@@ -130,6 +136,14 @@
         </div>
       </div>
 
+      <div class="financial-summary" id="financialSummary">
+        <div class="financial-summary-icon">🧭</div>
+        <div>
+          <strong>Your monthly financial direction</strong>
+          <p id="financialSummaryText">Add income, expenses, and a budget to receive a useful monthly summary.</p>
+        </div>
+      </div>
+
       <!-- Charts Row -->
       <div class="charts-row">
         <div class="chart-card">
@@ -153,12 +167,12 @@
         </div>
       </div>
 
-      <!-- Wealth Accumulation Chart -->
+      <!-- Net-Worth History Chart -->
       <div class="charts-row">
         <div class="chart-card wide">
           <div class="chart-header">
-            <h3>Wealth Accumulation</h3>
-            <span class="chart-subtitle">Investments + Goals + Emergency Fund over 12 months</span>
+            <h3>Net-Worth History</h3>
+            <span class="chart-subtitle">Assets minus liabilities from saved monthly snapshots</span>
           </div>
           <div class="chart-container tall">
             <canvas id="wealthChart"></canvas>
@@ -355,8 +369,8 @@
         </div>
         <div class="chart-card">
           <div class="chart-header">
-            <h3>Portfolio Performance</h3>
-            <span class="chart-subtitle">Last 12 Months</span>
+            <h3>Holdings Value</h3>
+            <span class="chart-subtitle">Cost basis vs value at current prices</span>
           </div>
           <div class="chart-container">
             <canvas id="performanceChart"></canvas>
@@ -538,6 +552,123 @@
 
     </section>
 
+    <!-- =================== FINANCIAL PLANNING SECTION =================== -->
+    <section class="content-section" id="section-planning">
+      <div class="planning-kpis">
+        <div class="plan-kpi"><span>Budget Used</span><strong id="planBudgetUsed">0%</strong></div>
+        <div class="plan-kpi"><span>Upcoming Bills</span><strong id="planUpcomingBills">₹0</strong></div>
+        <div class="plan-kpi"><span>Current Net Worth</span><strong id="planNetWorth">₹0</strong></div>
+        <div class="plan-kpi"><span>Forecast Balance</span><strong id="planForecast">₹0</strong></div>
+        <div class="plan-kpi"><span>Emergency Coverage</span><strong id="planEmergencyCoverage">Not set</strong></div>
+      </div>
+
+      <div class="planning-grid">
+        <div class="table-card">
+          <div class="table-header"><h3>Accounts</h3></div>
+          <form id="accountForm" class="compact-form">
+            <input id="accountName" type="text" maxlength="60" placeholder="Account label" required />
+            <input id="accountBank" type="text" maxlength="60" placeholder="Bank (optional)" />
+            <select id="accountPurpose" required>
+              <option value="salary">Salary</option>
+              <option value="investment">Investment</option>
+              <option value="spending">Spending</option>
+              <option value="savings">Savings</option>
+              <option value="other">Other</option>
+            </select>
+            <input id="accountOpeningBalance" type="number" step="0.01" placeholder="Opening balance" />
+            <input id="accountStatementBalance" type="number" step="0.01" placeholder="Latest bank balance" />
+            <button class="btn-primary" type="submit">Add Account</button>
+          </form>
+          <p class="planning-help">Use labels only. Do not enter account numbers or credentials.</p>
+          <div id="accountList" class="planning-list"></div>
+        </div>
+
+        <div class="table-card">
+          <div class="table-header"><h3>Internal Transfers</h3></div>
+          <form id="transferForm" class="compact-form">
+            <input id="transferDate" type="date" required />
+            <select id="transferFrom" required><option value="">From account</option></select>
+            <select id="transferTo" required><option value="">To account</option></select>
+            <input id="transferAmount" type="number" min="0.01" step="0.01" placeholder="Amount" required />
+            <input id="transferNote" type="text" maxlength="120" placeholder="Purpose (optional)" />
+            <button class="btn-primary" type="submit">Record Transfer</button>
+          </form>
+          <p class="planning-help">Transfers move money between your accounts; they are not income or expenses.</p>
+          <div id="transferList" class="planning-list"></div>
+        </div>
+
+        <div class="table-card account-ledger-card">
+          <div class="table-header">
+            <h3>Account Ledger</h3>
+            <select id="ledgerAccountSelect" aria-label="Account ledger"></select>
+          </div>
+          <p class="planning-help">One cash flow: income and transfers add money; expenses and investments deduct it; sales and withdrawals return money.</p>
+          <div id="accountLedgerSummary" class="account-ledger-summary"></div>
+          <div id="accountLedgerList" class="planning-list"></div>
+        </div>
+
+        <div class="table-card">
+          <div class="table-header">
+            <h3>Monthly Category Budgets</h3>
+            <button class="btn-secondary compact-btn" id="copyPreviousBudgetBtn" type="button">Copy Previous Month</button>
+          </div>
+          <form id="budgetForm" class="compact-form">
+            <select id="budgetCategory" required>
+              <option value="">Category</option>
+              <option value="food">Food</option><option value="grocery">Grocery</option>
+              <option value="travel">Travel</option><option value="housing">Housing</option>
+              <option value="health">Health</option><option value="entertainment">Entertainment</option>
+              <option value="utilities">Utilities</option><option value="shopping">Shopping</option>
+              <option value="other">Other</option>
+            </select>
+            <input id="budgetAmount" type="number" min="1" step="1" placeholder="Monthly limit" required />
+            <button class="btn-primary" type="submit">Save Budget</button>
+          </form>
+          <div id="budgetList" class="planning-list"></div>
+        </div>
+
+        <div class="table-card">
+          <div class="table-header"><h3>Recurring Bills</h3></div>
+          <form id="billForm" class="compact-form">
+            <input id="billName" type="text" maxlength="80" placeholder="Bill name" required />
+            <input id="billAmount" type="number" min="0.01" step="0.01" placeholder="Amount" required />
+            <input id="billDueDay" type="number" min="1" max="31" placeholder="Due day" required />
+            <select id="billCategory"><option value="utilities">Utilities</option><option value="housing">Housing</option><option value="health">Health</option><option value="entertainment">Entertainment</option><option value="other">Other</option></select>
+            <label class="checkbox-label"><input id="billIncludedInBudget" type="checkbox" checked /> Included in category budget</label>
+            <button class="btn-primary" type="submit">Add Bill</button>
+          </form>
+          <div id="billList" class="planning-list"></div>
+        </div>
+
+        <div class="table-card">
+          <div class="table-header"><h3>Monthly Net-Worth Snapshot</h3></div>
+          <form id="netWorthForm" class="compact-form planning-form-grid">
+            <input id="nwCash" type="number" min="0" step="1" placeholder="Cash" />
+            <input id="nwBank" type="number" min="0" step="1" placeholder="Bank balances" />
+            <input id="nwInvestments" type="number" min="0" step="1" placeholder="Investments" />
+            <input id="nwRetirement" type="number" min="0" step="1" placeholder="EPF / PPF / NPS" />
+            <input id="nwOtherAssets" type="number" min="0" step="1" placeholder="Other assets" />
+            <input id="nwLoans" type="number" min="0" step="1" placeholder="Loans" />
+            <input id="nwCards" type="number" min="0" step="1" placeholder="Credit cards" />
+            <input id="nwOtherLiabilities" type="number" min="0" step="1" placeholder="Other liabilities" />
+            <button class="btn-primary" type="submit">Save Snapshot</button>
+          </form>
+          <div id="netWorthHistory" class="planning-list"></div>
+        </div>
+
+        <div class="table-card">
+          <div class="table-header"><h3>Cash-Flow Forecast</h3></div>
+          <form id="cashFlowForm" class="compact-form planning-form-grid">
+            <input id="cfOpening" type="number" step="1" placeholder="Opening available cash" required />
+            <input id="cfOtherIncome" type="number" min="0" step="1" placeholder="Other expected income" />
+            <input id="cfSafety" type="number" min="0" step="1" placeholder="Minimum safety balance" />
+            <button class="btn-primary" type="submit">Save Forecast Inputs</button>
+          </form>
+          <div id="cashFlowForecast" class="forecast-panel"></div>
+        </div>
+      </div>
+    </section>
+
 
     <!-- =================== DOCUMENTS SECTION =================== -->
     <section class="content-section" id="section-documents">
@@ -630,6 +761,10 @@
             <label>Notes (optional)</label>
             <textarea id="expNotes" name="notes" placeholder="Additional notes..." maxlength="300"></textarea>
           </div>
+          <div class="form-group">
+            <label>Paid From Account (optional)</label>
+            <select id="expAccount" name="accountId" required><option value="">Select paying account</option></select>
+          </div>
           <div class="form-actions">
             <button type="button" class="btn-secondary" data-modal="expenseModal">Cancel</button>
             <button type="submit" class="btn-primary">Add Expense</button>
@@ -672,7 +807,7 @@
               </div>
               <div class="form-group">
                 <label id="invNameLabel">Asset Name</label>
-                <input type="text" id="invName" name="assetName" placeholder="e.g. Reliance Industries" maxlength="120" />
+                <input type="text" id="invName" name="assetName" placeholder="Company or fund name" maxlength="120" />
               </div>
             </div>
             <!-- MF scheme code (shown only for mutual_funds) -->
@@ -701,7 +836,7 @@
               </div>
             </div>
             <div class="form-row">
-              <div class="form-group">
+              <div class="form-group" id="invUnitsGroup">
                 <label id="invUnitsLabel">Units / Shares</label>
                 <input type="number" id="invUnits" name="units" placeholder="0" min="0.001" step="0.001" required />
               </div>
@@ -719,6 +854,10 @@
                 <label>Purchase Date</label>
                 <input type="date" id="invDate" name="date" required />
               </div>
+            </div>
+            <div class="form-group">
+              <label>Funding Account (optional)</label>
+              <select id="invAccount" required><option value="">Select funding account</option></select>
             </div>
           </div>
 
@@ -754,9 +893,55 @@
               <input type="number" id="tradePrice" name="price" placeholder="0.00" min="0.01" step="0.01" required />
             </div>
           </div>
+          <div class="form-group">
+            <label>Funding / Receiving Account (optional)</label>
+            <select id="tradeAccount" required><option value="">Select settlement account</option></select>
+          </div>
           <div class="form-actions">
             <button type="button" class="btn-secondary" data-modal="tradeModal">Cancel</button>
             <button type="submit" class="btn-primary">Confirm</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Balance-account transaction modal (PPF / FD) -->
+  <div class="modal-overlay" id="accountTransactionModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>Add Account Transaction</h2>
+        <button class="modal-close" data-modal="accountTransactionModal">&#x2715;</button>
+      </div>
+      <div class="modal-body">
+        <p class="trade-info"><strong id="accountTransactionName">Balance account</strong></p>
+        <form id="accountTransactionForm" autocomplete="off">
+          <div class="form-row">
+            <div class="form-group">
+              <label>Transaction Type</label>
+              <select id="accountTransactionType" required>
+                <option value="DEPOSIT">Deposit</option>
+                <option value="INTEREST">Interest Credit</option>
+                <option value="WITHDRAWAL">Withdrawal</option>
+                <option value="ADJUSTMENT">Balance Adjustment</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Date</label>
+              <input type="date" id="accountTransactionDate" required />
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Amount (₹)</label>
+            <input type="number" id="accountTransactionAmount" min="0.01" step="0.01" required />
+          </div>
+          <div class="form-group">
+            <label>Funding / Receiving Account (optional)</label>
+            <select id="accountTransactionAccount" required><option value="">Select funding account</option></select>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="btn-secondary" data-modal="accountTransactionModal">Cancel</button>
+            <button type="submit" class="btn-primary">Add Transaction</button>
           </div>
         </form>
       </div>

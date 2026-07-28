@@ -1,472 +1,695 @@
-# 💰 FinTrack — Personal Finance Tracker
+# FinTrack — Personal Finance Tracker
 
-A modern, single-page personal finance dashboard built with vanilla HTML, CSS, and JavaScript. Track expenses, monitor investments, and manage savings goals — all in one place.
+FinTrack is a local-first personal finance application for recording expenses,
+monitoring investments, planning monthly cash flow, and understanding whether
+your financial position is improving.
 
-## Quick Setup
+Your main financial data stays in a local Excel workbook named `data.xlsx`.
+Google Sheets is optional and is used only as an expense inbox: expenses
+submitted through a Google Form are imported into the local workbook when the
+server starts.
 
-```bash
-# 1. Clone the repo
-git clone https://github.com/<your-username>/finance-tracker.git
-cd finance-tracker
+FinTrack starts with an empty workbook. It does not create sample or dummy
+financial records.
 
-# 2. Install Python dependencies
-pip install -r requirements.txt
+## Contents
 
-# 3. Start the server
-python server.py
+1. [What FinTrack helps you answer](#what-fintrack-helps-you-answer)
+2. [Installation and startup](#installation-and-startup)
+3. [How data is stored](#how-data-is-stored)
+4. [Dashboard](#dashboard)
+5. [Expenses](#expenses)
+6. [Investments](#investments)
+7. [Savings](#savings)
+8. [Financial Plan](#financial-plan)
+9. [Documents](#documents)
+10. [Google Sheets expense sync](#google-sheets-expense-sync)
+11. [Financial glossary](#financial-glossary)
+12. [Calculations](#calculations)
+13. [Project structure](#project-structure)
+14. [Troubleshooting](#troubleshooting)
 
-# 4. Open in browser
-#    http://localhost:5000
+## What FinTrack helps you answer
+
+FinTrack is designed to answer five practical questions:
+
+- Where did my money go this month?
+- How much of my income did I save and invest?
+- Am I staying within my category budgets?
+- What bills and commitments are still coming?
+- Is my net worth moving in the right direction?
+
+The header month selector controls the month used by the dashboard, expenses,
+savings, budgets, snapshots, and forecasts.
+
+## Installation and startup
+
+### Requirements
+
+- Windows, macOS, or Linux
+- Python 3.10 or newer
+- Internet access for Google Sheets sync and live market prices
+- A modern web browser
+
+### Install dependencies
+
+Open PowerShell or a terminal in the project folder:
+
+```powershell
+cd D:\svaddep\programming\finance-tracker
+python3 -m pip install -r requirements.txt
 ```
 
-> **Windows shortcut:** Just double-click **`start.bat`** — it handles everything (Python detection, dependency install, desktop shortcut, browser launch).
+If your installation uses `python` instead of `python3`, use:
 
-> **Google Sheets backend:** Use `python server_gsheets.py` instead. Requires a service account JSON in `config/` — see [Google Sheets Setup](#google-sheets-setup).
-
----
-
-## Table of Contents
-
-1. [App Sections](#app-sections)
-   - [Dashboard](#1-dashboard)
-   - [Expenses](#2-expenses)
-   - [Investments](#3-investments--stocks--mutual-funds)
-   - [Savings](#4-savings)
-   - [Documents](#5-documents)
-2. [Features](#features)
-3. [Tech Stack](#tech-stack)
-4. [Getting Started](#getting-started)
-5. [Server Options](#two-server-options)
-6. [Portable Deployment](#portable-deployment)
-7. [Google Sheets Setup](#google-sheets-setup)
-8. [Google Drive (OAuth2) Setup](#google-drive-oauth2-setup)
-9. [Syncing Data](#syncing-data)
-10. [Live Price Integration](#live-price-integration)
-11. [How Values Are Calculated](#how-values-are-calculated)
-12. [Project Structure](#project-structure)
-13. [Future Improvements](#future-improvements)
-14. [License](#license)
-
----
-
-## App Sections
-
-### 1. Dashboard
-
-The central overview of your financial health. Shows:
-
-- **Summary Cards** — Total Wealth, Monthly Income, Monthly Expenses, Net Savings
-- **Income Breakdown** (donut chart) — Expenses split by category for the selected month
-- **Savings Rate Trend** (line chart) — % of income saved over the last 12 months
-- **Wealth Accumulation** (stacked area chart) — Investments + Savings Goals + Emergency Fund growth over 12 months
-- **Recent Transactions** — Last 5 expenses with category, amount, and date
-- **Investment Snapshot** — Top holdings with current value and gain/loss
-
-Click on any summary card's income value to edit monthly income inline.
-
-### 2. Expenses
-
-Full expense tracking with analytics:
-
-- **Expense Trend** (line + bar chart) — Monthly spending over last 12 months with per-category breakdown
-- **Category Split** (donut chart) — Proportional spending by category for the selected month
-- **Summary Strip** — Total, transaction count, average per day, and top category at a glance
-- **Expense Table** — All transactions with date, description, category, payment method, and amount
-- **Add Expense** — Quick-add form with category and payment method selection
-- **Categories** — Food 🍔, Travel ✈️, Housing 🏠, Health ⚕️, Entertainment 🎬, Utilities ⚡, Shopping 🛍️, Other 📦
-- **Payment Methods** — Credit Card, Debit Card, Cash, Bank Transfer, UPI
-- **Month Navigation** — Browse expenses by month with the header month selector
-
-### 3. Investments — Stocks & Mutual Funds
-
-Comprehensive investment portfolio management:
-
-- **Summary Cards** — Total Invested, Current Value, Unrealized P&L, Holdings count
-- **Risk Profile** (donut) — Portfolio split by Low / Moderate / High risk
-- **Market Cap Split** (donut) — Large Cap / Mid Cap / Small Cap distribution
-- **Category Breakdown** (donut) — Stocks vs Mutual Funds vs Foreign Stocks
-- **Stocks — Performance Analysis**
-  - **Growth Comparison** (line chart) — Each stock's value trajectory over 12 months
-  - **Invested vs Current** (line chart) — Aggregated cost basis vs market value over time
-  - Custom scrollable HTML legend — click to toggle individual stocks on/off
-- **Mutual Funds — Performance Analysis**
-  - **Growth Comparison** (line chart) — Each fund's value trajectory over 12 months
-  - **Invested vs Current** (line chart) — Aggregated cost basis vs NAV-based value over time
-- **All Holdings Table** — Grouped by Mutual Funds → Stocks → Foreign Stocks, each showing:
-  - Asset name, Units, Buy Price, Current Price, Invested, Current Value, Gain/Loss, Return %
-  - Expandable transaction history (BUY/SELL log with running totals)
-  - Action buttons: 🛒 Buy More, 💰 Sell, 🗑️ Delete
-- **Refresh Prices** — One-click live price fetch from Yahoo Finance (stocks) and mfapi.in (mutual funds)
-- **Debug Panel** — Toggle price fetch logs for troubleshooting
-- **Other Investments** — Gold (SGB, Physical), PPF, NPS, Fixed Deposits with card-based layout
-
-### 4. Savings
-
-Track savings progress and financial goals:
-
-- **Summary Cards** — Monthly Income, Expenses, Invested, Net Saved for the selected month
-- **Monthly Allocation** (100% stacked bar) — Last 12 months showing % of income going to expenses, investments, emergency fund, and savings
-- **Savings Goals Grid** — Visual cards for each goal with:
-  - Name, icon, target amount, current progress
-  - Progress bar with percentage
-  - Deadline tracking
-  - Add contribution / Edit / Delete actions
-- **Emergency Fund** — Dedicated tracker with:
-  - Target vs current with progress bar
-  - Contribution history table (date, amount, note)
-  - Add contribution button
-- **Income Editing** — Click income values to update for any month
-
-### 5. Documents
-
-Organize and manage your financial documents:
-
-- **Dynamic Categories** — Default categories (Salary Slips, Tax, Insurance, Investments, Bank Statements) plus create your own via the **＋** button
-- **Dynamic Year Folders** — Years discovered from actual folders; add new years via **＋** button
-- **Drag & Drop Upload** — Drop files directly or browse to upload
-- **Auto-Rename** — Files saved as `DocumentName_DD_Mon_YYYY.ext` with duplicate handling
-- **File Browser** — Table view with name, size, modified date
-- **Download & Delete** — One-click actions for each file
-- **Category Management** — Right-click a category tab to delete it (must be empty)
-- **Dual Backend** — Local filesystem (`server.py`) or Google Drive (`server_gsheets.py`)
-
-## Features
-
-- **5 Sections** — Dashboard, Expenses, Investments, Savings, Documents with sidebar navigation
-- **Dual Backend** — Local Excel (`server.py`) or Google Sheets (`server_gsheets.py`)
-- **Live Prices** — Auto-fetch stock prices (Yahoo Finance) and MF NAVs (mfapi.in)
-- **15+ Charts** — Powered by Chart.js — donuts, lines, stacked bars, area charts
-- **Transaction Tracking** — Full BUY/SELL history with running P&L per holding
-- **Savings Goals** — Set targets with deadlines, track progress, manage contributions
-- **Emergency Fund** — Dedicated tracker with contribution history
-- **Month Selector** — Navigate between months to review historical data
-- **Portable** — Copy folder to any machine, double-click `start.bat` to run
-- **Taskbar Pinnable** — Auto-creates desktop shortcut on first launch
-- **System Username** — Displays your Windows full name in the sidebar
-
-## Tech Stack
-
-| Layer   | Technology                |
-|---------|---------------------------|
-| Markup  | HTML5                     |
-| Styling | CSS3 (custom properties, flexbox, grid) |
-| Logic   | Vanilla JavaScript (ES6+) |
-| Charts  | Chart.js 4.4              |
-| Fonts   | Google Fonts — Inter       |
-
-## Getting Started
-
-### Quick Start (Recommended)
-
-Double-click **`start.bat`** — it auto-detects Python, installs dependencies, creates a desktop shortcut, starts the server, and opens the browser.
-
-### Manual Start
-
-```bash
-cd finance-tracker
-pip install -r requirements.txt
-python server.py
-# Open http://localhost:5000
+```powershell
+python -m pip install -r requirements.txt
 ```
 
-### Two Server Options
+### Start FinTrack
 
-| Server | Data Storage | Documents | Command |
-|--------|-------------|-----------|--------|
-| `server.py` | Local Excel (`data.xlsx`) | Local filesystem (`documents/`) | `python server.py` |
-| `server_gsheets.py` | Google Sheets (cloud) | Google Drive (cloud, OAuth2) | `python server_gsheets.py` |
+```powershell
+python3 .\server.py
+```
 
-#### `server.py` — Local Excel Backend
+Then open:
 
-- Stores all data in a single `data.xlsx` file using **openpyxl**
-- File lives in the same folder as the app (portable — copy and go)
-- Atomic writes via temp-file + rename to prevent corruption
-- Thread-safe with file locking for concurrent access
-- Auto-creates `data.xlsx` with seed data (sample expenses, investments, goals) on first run
-- Handles OneDrive / antivirus file locks with automatic retries
-- **No internet or account needed** — fully offline
-- Environment variable `FINTRACK_DATA_DIR` can override the data folder location
+```text
+http://localhost:5000
+```
 
-#### `server_gsheets.py` — Google Sheets Backend
+On Windows, you can also double-click `start.bat`. It detects Python, installs
+missing dependencies, creates a desktop shortcut, starts the server, and opens
+the application.
 
-- Stores all data in a **Google Sheet** via the `gspread` library
-- Data accessible from any device via Google Sheets (view/edit in browser)
-- Requires a **Google Cloud service account** JSON credentials file
-- Uses batch reads/writes to minimize API calls
-- Thread-safe with a shared gspread client
-- **Documents stored in Google Drive** — uploaded files go to `Finances/FinTrack_Documents/<category>/<year>/` folders
-- **OAuth2 for Drive** — uses your personal Google account (not the service account) for file uploads, so files count against your 15 GB quota. First run opens a browser for sign-in; tokens are cached in `config/drive_token.pickle`
-- **Service account for Sheets** — spreadsheet read/write uses the SA (no quota issues)
-- **Requires internet** — the app talks to Google APIs
-- Ideal for syncing data across multiple machines
+## How data is stored
 
-#### Shared Features (Both Servers)
+FinTrack uses one canonical server: `server.py`.
 
-- Flask server on `http://localhost:5000` with CORS enabled
-- Serves the static frontend (HTML/JS/CSS)
-- **Price proxy APIs** — fetches live stock prices (Yahoo Finance) and mutual fund NAVs (mfapi.in) server-side, avoiding browser CORS issues
-- **User info API** — displays your Windows full name in the sidebar
-- **Export API** — download `data.xlsx` from the browser
-- Identical API endpoints — the frontend works with either server without changes
+| Data | Storage location |
+|---|---|
+| Expenses | `data.xlsx` → `Expenses` |
+| Investments | `data.xlsx` → `Investments` and `Transactions` |
+| Income and savings history | `data.xlsx` → `SavingsHistory` |
+| Savings goals | `data.xlsx` → `SavingsGoals` |
+| Emergency fund | `data.xlsx` → `EmergencyFund` and `EFContributions` |
+| Monthly budgets | `data.xlsx` → `Budgets` |
+| Recurring bills | `data.xlsx` → `RecurringBills` |
+| Net-worth snapshots | `data.xlsx` → `NetWorth` |
+| Cash-flow settings | `data.xlsx` → `CashFlow` |
+| Account labels and reconciliation balances | `data.xlsx` → `Accounts` |
+| Internal account transfers | `data.xlsx` → `Transfers` |
+| Uploaded documents | Local `documents/` directory |
+| Incoming Google Form expenses | Google Sheet → `FormExpenses` |
 
-## Portable Deployment
+`data.xlsx` is the source of truth. Do not edit it in Excel while FinTrack is
+saving data, because Windows or OneDrive may temporarily lock the file.
 
-Copy the entire `finance-tracker` folder to any Windows machine with Python 3.10+ installed. On first launch, `start.bat` will:
+Use **Export Excel** in the sidebar to download a copy of the workbook.
 
-1. Auto-detect Python on PATH
-2. Install required packages from `requirements.txt`
-3. Create a Desktop shortcut (right-click → **Pin to taskbar**)
-4. Start the server and open the browser
+## Dashboard
 
-Data (`data.xlsx`) is stored in the same folder — everything travels together.
+The Dashboard is a summary of the selected month and your current tracked
+financial position.
 
-## Google Sheets Setup
+### Summary cards
 
-To use `server_gsheets.py` with your Google account:
+- **Net Worth** — assets minus liabilities from the selected month's saved
+  net-worth snapshot. If no snapshot exists yet, the card temporarily shows
+  the current tracked investment value.
+- **Monthly Income** — income recorded for the selected month. Click the value
+  to create or update it.
+- **Monthly Expenses** — total expense transactions dated in the selected
+  month.
+- **Net Savings** — income remaining after expenses, investment purchases, and
+  emergency-fund contributions.
 
-1. **Create a Google Cloud project** at [console.cloud.google.com](https://console.cloud.google.com/)
-2. **Enable APIs** — Google Sheets API + Google Drive API
-3. **Create a service account** → download the JSON key file
-4. **Place the JSON file** in the `config/` folder
-5. **Copy the config template:**
-   ```bash
-   cp config/gsheets.env.example config/gsheets.env
-   ```
-6. **Edit `config/gsheets.env`** with your values:
+Savings goals and the emergency fund are allocations, not additional assets.
+They are therefore not added to Net Worth, which prevents the same money from
+being counted twice.
+
+### Financial direction summary
+
+The sentence below the cards combines several signals into plain language:
+
+- current savings rate;
+- spending change from the previous month;
+- remaining or exceeded budget;
+- upcoming recurring bills; and
+- a warning when forecast cash falls below the chosen safety balance.
+
+It is a summary of entered data, not financial advice.
+
+### Income Breakdown
+
+The doughnut chart divides the selected month's income into:
+
+- expense categories;
+- investments purchased during the month;
+- emergency-fund contributions; and
+- **Unallocated**, which is income not assigned to any of those uses.
+
+If income has not been entered, expense categories can still appear, but their
+percentage of income cannot be calculated.
+
+### Savings Rate Trend
+
+Shows the percentage of income retained after expenses, investments, and
+emergency contributions for up to the last 12 months.
+
+A negative savings rate means total outflows were greater than recorded income.
+
+### Net-Worth History
+
+Shows assets minus liabilities from your saved monthly snapshots. The chart
+does not manufacture historical investment prices or estimate goal balances.
+
+### Recent Transactions and Investment Snapshot
+
+- **Recent Transactions** shows the latest expense entries.
+- **Investment Snapshot** shows selected holdings, their current value, and
+  unrealised gain or loss.
+
+## Expenses
+
+The Expenses section records and explains spending.
+
+### Expense fields
+
+- **Date** — when the payment occurred.
+- **Description** — merchant, bill, or purpose of the payment.
+- **Category** — the type of spending.
+- **Payment Method** — how the expense was paid.
+- **Amount** — money spent.
+
+### Expense categories
+
+| Category | Meaning |
+|---|---|
+| Food | Restaurants, delivery, snacks, and eating outside |
+| Grocery | Food and household items purchased for home |
+| Travel | Public transport, fuel, taxis, tickets, and trips |
+| Housing | Rent, maintenance, and home-related costs |
+| Health | Medical visits, medicine, fitness, and healthcare |
+| Entertainment | Movies, games, events, and leisure subscriptions |
+| Utilities | Electricity, water, internet, phone, and similar bills |
+| Shopping | Clothing, electronics, and non-routine purchases |
+| Other | Spending that does not fit another category |
+
+### Payment methods
+
+- **Credit Card** — payment borrowed from the card issuer and paid later.
+- **Debit Card** — payment taken directly from a bank account.
+- **Cash** — physical currency.
+- **Bank Transfer** — account-to-account transfer such as NEFT or IMPS.
+- **UPI** — instant bank payment through a UPI application.
+
+### Charts and summary values
+
+- **Expense Trend** shows totals and category composition for the last 12
+  months. Therefore, it can show older spending even when the table is empty
+  for the currently selected month.
+- **Category Split** shows the selected month's spending by category.
+- **Total This Month** is the sum of filtered expenses.
+- **Transactions** is the number of filtered expense records.
+- **Average Per Day** is the filtered total divided by 30.
+- **Largest Expense** is the highest single filtered transaction.
+- **Projected Month-End** estimates spending at the current daily pace.
+
+Filters affect the expense table and summary strip. The 12-month trend remains
+a historical chart.
+
+## Investments
+
+The Investments section tracks holdings and BUY/SELL transactions. Prices are
+informational and may be delayed or unavailable.
+
+### Main investment terms
+
+- **Asset / Ticker** — the market identifier of a security. Indian NSE tickers
+  normally end in `.NS`; US tickers generally have no suffix.
+- **Scheme Code** — the identifier used to look up an Indian mutual fund on
+  `mfapi.in`.
+- **Units** — shares, mutual-fund units, grams, or another quantity currently
+  held.
+- **Buy Price** — average acquisition price per unit.
+- **Current Price** — latest known price or NAV per unit.
+- **Invested Value / Cost Basis** — units held multiplied by average buy price.
+- **Current Value** — units held multiplied by current price.
+- **Gain / Loss (P&L)** — current value minus invested value.
+- **Return %** — gain or loss divided by invested value.
+- **Holding** — one asset currently owned.
+
+### Portfolio terms
+
+- **Portfolio** — all investments tracked together.
+- **Asset Allocation** — how the portfolio is divided among stocks, mutual
+  funds, gold, retirement products, and deposits.
+- **Market Capitalisation** — company size based on total market value. FinTrack
+  uses Large, Mid, and Small Cap labels.
+- **Risk Level** — a user-selected Low, Moderate, or High classification. It is
+  descriptive and is not calculated by FinTrack.
+- **Unrealised P&L** — gain or loss on investments still held.
+- **Realised P&L** — sale proceeds minus the moving-average cost of units sold.
+  Fully sold holdings remain available so their transaction history is not lost.
+- **NAV** — Net Asset Value per unit of a mutual fund.
+- **Weighted Average Buy Price** — the combined average unit cost after
+  purchasing more units at a different price.
+
+### Supported investment groups
+
+- Indian stocks
+- Foreign stocks
+- Mutual funds
+- Gold
+- Public Provident Fund (PPF)
+- National Pension System (NPS)
+- Fixed deposits (FD)
+
+Stock prices are requested through the local server from Yahoo Finance. Mutual
+fund NAVs are requested from `mfapi.in`. Both requests go through the local
+server; browser-side public CORS proxies are not used. Gold, PPF, NPS, and
+fixed-deposit values are entered manually.
+
+PPF and fixed deposits are transaction-based balance accounts. Their supported
+transactions are:
+
+- **DEPOSIT** - money contributed by you;
+- **INTEREST** - interest credited by the institution;
+- **WITHDRAWAL** - money removed from the account; and
+- **ADJUSTMENT** - a correction required to reconcile a statement.
+
+FinTrack derives total principal, interest earned, withdrawals, and current
+balance from these entries. Use the plus button on a balance-account card to
+add the next dated transaction. Only DEPOSIT entries count as monthly
+investment outflow; credited interest does not reduce monthly savings.
+
+Mutual funds, stocks, NPS units, and Gold ETFs are unit-based holdings. For an
+existing SIP, enter its transaction history or one opening BUY using current
+units and remaining cost basis.
+
+## Savings
+
+The Savings section explains how recorded income was allocated and tracks
+specific reserves.
+
+### Monthly values
+
+- **Income** — money received during the month.
+- **Expenses** — total spending during the month.
+- **Invested** — cost of BUY transactions and PPF/FD DEPOSIT transactions
+  during the month.
+- **Emergency** — contributions made to the emergency fund.
+- **Net Saved** — income left after all four outflow types above.
+- **Savings Rate** — net saved as a percentage of income.
+- **Invest Rate** — investment purchases as a percentage of income.
+
+### Savings Goals
+
+A savings goal is money reserved for a specific future purpose.
+
+- **Target** — total amount required.
+- **Current** — amount already assigned to the goal.
+- **Deadline** — intended completion date.
+- **Progress** — current amount divided by target.
+
+Goal balances show allocation progress but are not added to Dashboard Net
+Worth, preventing money held in an account or investment from being counted
+twice.
+
+### Emergency Fund
+
+An emergency fund is accessible money reserved for unexpected events such as
+medical costs, urgent repairs, or loss of income.
+
+- **Target** — desired emergency reserve.
+- **Current** — sum of recorded emergency-fund contributions.
+- **Contribution** — an amount added on a particular date.
+- **Coverage Months** — current emergency fund divided by average essential
+  monthly expenses over the latest three selected months. It appears in the
+  Financial Plan summary.
+
+## Financial Plan
+
+The Financial Plan section converts historical records into forward-looking
+information for the selected month.
+
+### Accounts and Internal Transfers
+
+Accounts are optional labels for where money is held. Store only a friendly
+name, bank name, purpose, and balances - never an account number, password,
+PIN, OTP, or banking credential.
+
+Each account has:
+
+- **Purpose** - Salary, Investment, Spending, Savings, or Other;
+- **Opening Balance** - starting point before account-attributed tracker
+  activity;
+- **Tracked Balance** - opening balance plus attributed income and incoming
+  transfers, minus attributed expenses, investments, and outgoing transfers;
+- **Latest Bank Balance** - the balance manually copied from the bank; and
+- **Difference** - bank balance minus tracked balance, used for reconciliation.
+
+An internal transfer decreases one tracked account and increases another. It
+does not change income, expenses, savings, or net worth.
+
+Example:
+
+```text
+Salary credited to Axis        = Income assigned to Axis Salary
+Axis to SBI                     = Internal transfer
+SBI mutual-fund SIP             = Investment BUY funded by SBI Investment
+Axis to Kotak                   = Internal transfer
+Kotak grocery payment           = Expense paid from Kotak Spending
+```
+
+New income defaults to the active Salary account, new expenses default to the
+active Spending account, and new investment contributions default to the
+active Investment account. These assignments can be changed in their forms.
+Existing historical records remain unassigned until deliberately reconciled.
+
+### Budget Used
+
+A **budget** is the maximum amount you plan to spend in a category during one
+month.
+
+- **Spent** comes from actual expense transactions in that category.
+- **Remaining** is category budget minus category spending.
+- **Budget Used %** is total monthly spending divided by total monthly budget.
+- A yellow bar means usage is approaching the limit.
+- A red bar means spending is greater than the budget.
+
+**Copy Previous Month** duplicates the previous month's category limits into
+the selected month. It replaces any budgets already entered for that month.
+
+### Recurring Bills
+
+A recurring bill is a payment expected repeatedly, such as rent, internet, an
+EMI, insurance, or a subscription.
+
+- **Amount** is the expected payment.
+- **Due Day** is the day number within each month.
+- **Upcoming Bills** totals active bills whose due day has not passed in the
+  selected period.
+- **Included in category budget** means the bill is already covered by that
+  category's remaining budget and will not be subtracted a second time.
+
+Recurring bills are commitments used by the forecast. They do not
+automatically create expense transactions, because an expected bill and a paid
+expense are different records.
+
+The forecast subtracts Remaining Budget plus only those upcoming bills marked
+as not included in a category budget.
+
+### Net-Worth Snapshot
+
+**Net Worth** measures what you own minus what you owe at one point in time.
+
+Assets entered in a snapshot:
+
+- **Cash** — physical or immediately available cash.
+- **Bank Balances** — money in savings or current accounts.
+- **Investments** — current value of investments.
+- **EPF / PPF / NPS** — retirement and long-term savings balances.
+- **Other Assets** — other assets you choose to include.
+
+Liabilities entered in a snapshot:
+
+- **Loans** — outstanding home, vehicle, education, personal, or other loans.
+- **Credit Cards** — unpaid card balances.
+- **Other Liabilities** — other money owed.
+
+Formula:
+
+```text
+Net Worth = Total Assets − Total Liabilities
+```
+
+Save one snapshot each month to see direction over time. A rising net worth
+normally indicates improving financial position, but asset values and debt
+changes should be reviewed separately.
+
+### Cash-Flow Forecast
+
+Cash flow describes money expected to enter and leave during a period.
+
+- **Opening Available Cash** — available cash at the beginning of the selected
+  month.
+- **Other Expected Income** — expected income not included in Monthly Income.
+- **Safety Balance** — minimum cash balance you want to preserve.
+- **Remaining Budget** — budget not yet spent.
+- **Forecast Balance** — estimated cash remaining after planned outflows.
+
+FinTrack calculates:
+
+```text
+Forecast Balance
+= Opening Available Cash
++ Monthly Income
++ Other Expected Income
+− Remaining Budget
+− Upcoming Bills
+```
+
+A warning appears when Forecast Balance is below Safety Balance.
+
+This is a planning estimate. It is only as accurate as the income, budgets,
+bills, and opening cash entered.
+
+## Documents
+
+The Documents section stores financial files locally.
+
+- **Category** groups related files, such as Tax, Insurance, Salary Slips,
+  Investments, or Bank Statements.
+- **Year** separates documents by financial or calendar year.
+- **Upload** copies a selected file into `documents/<category>/<year>/`.
+- **Download** opens or saves a stored file.
+- **Delete** permanently removes the selected document.
+
+Documents are not stored in Google Drive by the current version.
+
+### Local server and backup settings
+
+FinTrack listens only on `127.0.0.1` and runs with Flask debug mode disabled by
+default. Optional environment variables are:
+
+```env
+FINTRACK_DATA_DIR=D:\path\to\finance-data
+FINTRACK_BACKUP_KEEP=20
+FINTRACK_HOST=127.0.0.1
+PORT=5000
+FLASK_DEBUG=false
+```
+
+Before each workbook update, FinTrack creates a timestamped recovery copy in
+`backups/` and retains the newest configured number. Workbook schema upgrades
+add or reorder known columns without deleting existing rows. An unreadable
+workbook is moved into `backups/` before a fresh workbook is created.
+
+## Google Sheets expense sync
+
+Google Sheets is optional. FinTrack continues to work locally when Google is
+not configured or the internet is unavailable.
+
+### Configuration
+
+1. Create a Google Cloud project.
+2. Enable the Google Sheets API.
+3. Create a service account and download its JSON key.
+4. Put the key inside `config/`.
+5. Copy `config/gsheets.env.example` to `config/gsheets.env`.
+6. Set the existing configuration values:
+
    ```env
    GSHEETS_CREDS_FILE=your-credentials-file.json
-   GSHEETS_SPREADSHEET_ID=your-spreadsheet-id-here
+   GSHEETS_SPREADSHEET_ID=your-spreadsheet-id
    ```
-7. **Create a Google Sheet** → share it (Editor) with the service account email (found in the JSON under `client_email`)
-8. **Create a `Finances` folder** in Google Drive → share it (Editor) with the same service account email (needed for document uploads)
-9. **Set up OAuth2 for Drive** — see [Google Drive (OAuth2) Setup](#google-drive-oauth2-setup)
 
-> **Spreadsheet ID** is in the sheet URL: `docs.google.com/spreadsheets/d/<THIS_PART>/edit`
+7. Share the spreadsheet with the service account's `client_email`.
+8. Use `config/setup_form.gs` to create the Google Form and `FormExpenses`
+   worksheet.
 
-> **Service account email** is in the JSON file under `client_email`
+See [Google Sheets expense inbox setup](docs/GOOGLE_SERVICE_ACCOUNT.md) for
+detailed instructions.
 
-> See [docs/GOOGLE_SERVICE_ACCOUNT.md](docs/GOOGLE_SERVICE_ACCOUNT.md) for a detailed explanation of how service accounts, authentication, and Drive sharing work.
+### Sync behaviour
 
-## Google Drive (OAuth2) Setup
+When FinTrack starts:
 
-Google Drive file uploads require **OAuth2 user credentials** because service accounts have zero storage quota — they can create folders but not files.
+1. It reads rows from `FormExpenses`.
+2. It validates dates and amounts.
+3. It normalises category and payment names.
+4. It checks local expenses for duplicates.
+5. It writes new expenses to `data.xlsx`.
+6. It removes successfully handled or duplicate inbox rows.
 
-### Why OAuth2?
+Invalid rows remain in Google Sheets so they can be corrected. A failed Google
+connection does not stop the local server.
 
-| Operation | Service Account | OAuth2 (You) |
-|-----------|:-:|:-:|
-| Create/list/delete folders | ✅ | ✅ |
-| Read/download files | ✅ | ✅ |
-| Upload files | ❌ (0 quota) | ✅ (your 15 GB) |
-| Spreadsheet read/write | ✅ | N/A (uses SA) |
+## Financial glossary
 
-### Setup Steps
+| Term | Plain-language meaning |
+|---|---|
+| Asset | Something you own that has financial value |
+| Liability | Money you owe |
+| Net Worth | Total assets minus total liabilities |
+| Income | Money received |
+| Expense | Money spent |
+| Cash Flow | Movement of money in and out |
+| Budget | Planned spending limit |
+| Savings | Income retained instead of spent or invested |
+| Investment | Money placed into an asset with the expectation of future value or income |
+| Principal | Original amount invested or borrowed |
+| Interest | Cost of borrowing or return paid on savings/deposits |
+| EMI | Equated Monthly Instalment; a regular loan payment |
+| SIP | Systematic Investment Plan; a recurring mutual-fund investment |
+| P&L | Profit and Loss |
+| Cost Basis | Total purchase cost of an investment currently held |
+| NAV | Per-unit value of a mutual fund |
+| Portfolio | Collection of investments |
+| Diversification | Spreading money across assets to reduce concentration |
+| Liquidity | How quickly an asset can be converted into usable cash |
+| Emergency Fund | Accessible reserve for unexpected needs |
+| Savings Rate | Percentage of income remaining after tracked outflows |
+| Investment Rate | Percentage of income used for investments |
+| Market Cap | Market value used to describe company size |
+| Unrealised Gain/Loss | Change in value of an asset not yet sold |
+| Realised Gain/Loss | Profit or loss completed through a sale |
+| Forecast | Estimate based on expected future inputs |
 
-1. Go to [Google Cloud Console → Credentials](https://console.cloud.google.com/apis/credentials) → your project
-2. Click **Create Credentials → OAuth Client ID**
-3. If prompted for a consent screen:
-   - User type: **External**
-   - App name: `FinTrack`
-   - Add your email as a **Test user**
-4. Application type: **Desktop app** → name: `FinTrack Desktop` → Create
-5. Click **Download JSON** → save as `config/client_secret.json`
-6. Add to `config/gsheets.env`:
-   ```env
-   DRIVE_OAUTH_CLIENT_FILE=client_secret.json
-   ```
-7. Start the server: `python server_gsheets.py`
-   - Your browser opens for Google sign-in (one time)
-   - Token cached in `config/drive_token.pickle`
-   - Subsequent starts are automatic (no browser popup)
-   - Token auto-refreshes; re-login needed ~every 6 months
-
-### Architecture: SA + OAuth2
-
-```
-server_gsheets.py
-├── Sheets API ──→ Service Account (SA credentials)
-│   └── Expenses, Investments, Savings, etc.
-└── Drive API ───→ OAuth2 (your personal credentials)
-    └── Documents upload/download/list/delete
-```
-
-## Syncing Data
-
-**Drive is the golden source** when using `server_gsheets.py`. Use the sync script to pull everything to local storage:
-
-```bash
-# Sync everything (Sheets → data.xlsx + Drive docs → documents/)
-python sync_drive_to_local.py
-
-# Preview what would change (no writes)
-python sync_drive_to_local.py --dry-run
-
-# Just sync spreadsheet data
-python sync_drive_to_local.py --sheets-only
-
-# Just sync documents
-python sync_drive_to_local.py --docs-only
-```
-
-### What the sync script does
-
-| Source | Destination | Details |
-|--------|------------|--------|
-| Google Sheets (7 worksheets) | `data.xlsx` | Exports Expenses, Investments, Transactions, SavingsGoals, EmergencyFund, EFContributions, SavingsHistory |
-| Drive `FinTrack_Documents/` | `documents/` | Downloads all files; skips unchanged files (same size) |
-
-### Switching between servers
-
-Both servers use **identical API endpoints** — the frontend doesn't know or care which backend is running.
-
-| Scenario | Steps |
-|----------|------|
-| **Cloud → Local** | Run `python sync_drive_to_local.py`, then use `python server.py` |
-| **Local → Cloud** | Start `python server_gsheets.py` (it creates empty sheets); manually re-enter data or build an upload script |
-| **Sheets + local docs** | Copy the `# API: DOCUMENTS` section from `server.py` into `server_gsheets.py`, replacing the Drive-based document APIs |
-
-## Project Structure
-
-```
-finance-tracker/
-├── static/                  # Frontend source
-│   ├── index.html
-│   ├── script.js
-│   └── style.css
-├── config/                  # Configuration & credentials
-│   ├── gsheets.env.example  # Template — copy to gsheets.env
-│   ├── gsheets.env          # Your settings (gitignored)
-│   ├── client_secret.json   # OAuth2 client secret (gitignored)
-│   ├── drive_token.pickle   # Cached OAuth2 token (gitignored)
-│   └── *.json               # Service account key (gitignored)
-├── docs/                    # Documentation
-│   ├── ARCHITECTURE.md
-│   ├── COMPONENTS.md
-│   └── GOOGLE_SERVICE_ACCOUNT.md
-├── server.py                # Flask server (local Excel backend)
-├── server_gsheets.py        # Flask server (Google Sheets + Drive backend)
-├── sync_drive_to_local.py   # One-way sync: Drive → local
-├── requirements.txt         # Python dependencies
-├── start.bat                # One-click launcher (Windows)
-├── README.md
-├── .gitignore
-├── data.xlsx                # Auto-generated at runtime (gitignored)
-├── documents/               # Auto-created at runtime (gitignored)
-│   ├── salary_slips/        # Default categories
-│   ├── tax/
-│   ├── insurance/
-│   ├── investments/
-│   ├── bank_statements/
-│   └── <your_custom>/       # Create via app's ＋ button
-└── bkp/                     # Backup of earlier versions
-```
-
-## Screenshots
-
-> Open `index.html` in a browser to see the dashboard with summary cards, recent transactions, investment snapshot, and savings goals.
-
-## Future Improvements
-
-- Dark mode toggle
-- Export data to CSV / PDF
-- Mobile-responsive layout refinements
-
-## Live Price Integration
-
-FinTrack includes a **plug-and-play price provider system** that fetches live prices for stocks and mutual funds. Each category maps to a swappable async provider in the `priceProviders` object.
-
-### Supported Providers
-
-| Category | API | CORS Proxy | Lookup Key | API Key |
-|---|---|---|---|---|
-| Mutual Funds | [mfapi.in](https://www.mfapi.in/) | None (direct) | `schemeCode` | None |
-| Stocks | [Yahoo Finance](https://finance.yahoo.com/) | [api.codetabs.com](https://api.codetabs.com) | `ticker` | None |
-| Foreign Stocks | Yahoo Finance (same) | api.codetabs.com | `ticker` | None |
-| Gold | [metals.dev](https://metals.dev/) | None (direct) | — | Free tier |
-| PPF / NPS / FD | Manual entry | — | — | — |
-
-### Yahoo Ticker Format
-
-| Market | Format | Example |
-|--------|--------|---------|
-| NSE India | `SYMBOL.NS` | `RELIANCE.NS`, `TCS.NS`, `INFY.NS` |
-| BSE India | `SYMBOL.BO` | `RELIANCE.BO`, `HDFCBANK.BO` |
-| US Stocks | `SYMBOL` | `AAPL`, `MSFT`, `TSLA` |
-
-### How It Works
-
-1. Add a **Yahoo Ticker** (e.g. `RELIANCE.NS`, `TCS.BO`) or **MF Scheme Code** (e.g. `119551`) when creating an investment
-2. Click **🔄 Refresh Prices** on the Investments page
-3. Live prices are fetched in parallel and the UI updates with a toast notification
-
-### Swapping a Provider
-
-Replace any function in the `priceProviders` object in `script.js`:
-
-```js
-// Example: switch mutual funds to a different API
-priceProviders.mutual_funds = async (inv) => {
-  const res = await fetch(`https://your-api.com/nav/${inv.schemeCode}`);
-  const data = await res.json();
-  return data.nav;
-};
-```
-
-Each provider receives the full investment object and must return `number | null`.
-
-## How Values Are Calculated
+## Calculations
 
 ### Dashboard
 
-| Metric | Formula |
-|--------|---------|
-| **Total Wealth** | `Investment Current Value + Emergency Fund + Savings Goals Current` |
-| **Monthly Income** | `savingsHistory[currentMonth].income` (from data) |
-| **Monthly Expenses** | `Σ expenses[i].amount` (sum of all expenses for the month) |
-| **Net Savings** | `Monthly Income − Monthly Expenses` |
-| **Savings Rate** | `(Net Savings / Monthly Income) × 100` |
+```text
+Investment Current Value = Σ (Units × Current Price)
+Net Worth = Snapshot Assets − Snapshot Liabilities
+
+Monthly Expenses = Σ selected-month expense amounts
+
+Net Savings
+= Monthly Income
+− Monthly Expenses
+− Monthly Investment BUY Outflow
+− Monthly Emergency Contributions
+
+Savings Rate = Net Savings ÷ Monthly Income × 100
+```
 
 ### Investments
 
-| Metric | Formula |
-|--------|---------|
-| **Total Invested** | `Σ (units × buyPrice)` for all investments |
-| **Current Value** | `Σ (units × currentPrice)` for all investments |
-| **Total Gain / Loss** | `Current Value − Total Invested` |
-| **Overall Return %** | `(Total Gain / Total Invested) × 100` |
-| **Per-holding P&L** | `(units × currentPrice) − (units × buyPrice)` |
-| **Per-holding Gain %** | `((currentPrice − buyPrice) / buyPrice) × 100` |
-| **Weighted Avg Buy Price** | `(oldUnits × oldBuyPrice + newUnits × newPrice) / totalUnits` (on new BUY) |
+```text
+Invested Value = Remaining Units × Moving-Average Buy Price
+Current Value = Units × Current Price
+Gain/Loss = Current Value − Invested Value
+Return % = Gain/Loss ÷ Invested Value × 100
 
-### Savings
+On SELL:
+Cost Removed = Units Sold × Moving-Average Buy Price
+Realised Gain/Loss = Sale Proceeds − Cost Removed
 
-| Metric | Formula |
-|--------|---------|
-| **Goal Progress %** | `min(100, round(current / target × 100))` |
-| **Emergency Fund %** | `min(100, round(current / target × 100))` |
-| **Cumulative Savings** | Running total of `savingsHistory[i].saved` |
+Weighted Average Buy Price
+= ((Old Units × Old Average Price) + (New Units × New Price))
+  ÷ Total Units
+```
 
-### Charts — Data Sources
+### Savings goals and emergency fund
 
-| Chart | Section | Type | Source |
-|-------|---------|------|--------|
-| Income Breakdown | Dashboard | Donut | `expenses[]` grouped by `category` |
-| Savings Rate Trend | Dashboard | Line | `savingsHistory[]` — savings % over 12 months |
-| Wealth Accumulation | Dashboard | Stacked Area | `investments[]` + `savingsGoals[]` + `emergencyFund` over 12 months |
-| Expense Trend | Expenses | Line + Bar | `expenses[]` monthly totals over 12 months |
-| Category Split | Expenses | Donut | `expenses[]` grouped by `category` for selected month |
-| Portfolio Allocation | Investments | Donut | `investments[]` grouped by `category` |
-| Portfolio Performance | Investments | Line | `investments[].transactions` rolled up by month |
-| Risk Profile | Stocks & MF | Donut | `investments[]` grouped by `riskLevel` |
-| Market Cap Split | Stocks & MF | Donut | `investments[]` grouped by `marketCap` |
-| Category Breakdown | Stocks & MF | Donut | `investments[]` — stocks vs MF vs foreign |
-| Stocks Growth Comparison | Stocks & MF | Multi-line | Per-stock value trajectory over 12 months |
-| Stocks Invested vs Current | Stocks & MF | Area | Aggregated cost basis vs market value over 12 months |
-| MF Growth Comparison | Stocks & MF | Multi-line | Per-fund value trajectory over 12 months |
-| MF Invested vs Current | Stocks & MF | Area | Aggregated cost basis vs NAV value over 12 months |
-| Other Category | Other Investments | Donut | `investments[]` — gold vs PPF vs NPS vs FD |
-| Monthly Allocation | Savings | 100% Stacked Bar | `savingsHistory[]` — % split of income over 12 months |
+```text
+Goal Progress % = Current Goal Amount ÷ Goal Target × 100
+Emergency Progress % = Current Emergency Fund ÷ Emergency Target × 100
+```
+
+Displayed progress is capped at 100%, although the stored amount can be greater
+than the target.
+
+### Budget and forecast
+
+```text
+Budget Used % = Actual Monthly Expenses ÷ Total Monthly Budget × 100
+Remaining Budget = max(0, Total Monthly Budget − Actual Monthly Expenses)
+
+Forecast Balance
+= Opening Cash + Monthly Income + Other Income
+− Remaining Budget − Upcoming Bills Not Included in Budget
+```
+
+## Project structure
+
+```text
+finance-tracker/
+├── server.py                    Flask API and local workbook handling
+├── requirements.txt             Python dependencies
+├── start.bat                    Windows launcher
+├── data.xlsx                    Generated local finance data (gitignored)
+├── backups/                     Local recovery copies (gitignored)
+├── documents/                   Uploaded local documents (gitignored)
+├── static/
+│   ├── index.html               Application structure
+│   ├── script.js                UI behaviour and calculations
+│   └── style.css                Application styling
+├── config/
+│   ├── gsheets.env.example      Google Sheets configuration template
+│   └── setup_form.gs            Optional Google Form setup
+└── docs/
+    └── GOOGLE_SERVICE_ACCOUNT.md
+```
+
+## Troubleshooting
+
+### `ModuleNotFoundError: No module named 'flask'`
+
+Install the project dependencies with the same Python command used to run the
+server:
+
+```powershell
+python3 -m pip install -r requirements.txt
+```
+
+### `python` is not recognised
+
+Try:
+
+```powershell
+python3 --version
+```
+
+or:
+
+```powershell
+py --version
+```
+
+Use whichever command succeeds for installation and startup.
+
+### Dashboard is empty
+
+- Confirm `server.py` is running.
+- Check that the selected month contains data.
+- Click Monthly Income to enter income.
+- Add expenses manually or verify Google Sheets sync.
+- Hard-refresh the browser with `Ctrl+F5` after restarting the server.
+
+### Expense table is empty but Expense Trend is visible
+
+The table can be filtered to one month while Expense Trend always covers the
+last 12 months. Axes and a zero line can also appear when there are no expense
+records.
+
+### Google Sheets sync is skipped
+
+- Confirm `config/gsheets.env` exists.
+- Confirm the credentials filename and spreadsheet ID are correct.
+- Share the spreadsheet with the service-account email.
+- Confirm the worksheet is named `FormExpenses`.
+- Check internet access.
+
+### `data.xlsx` is locked
+
+Close the workbook in Excel and wait for OneDrive or antivirus scanning to
+finish, then restart FinTrack.
 
 ## License
 
-This project is for personal/educational use.
+This project is intended for personal and educational use.

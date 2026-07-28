@@ -20,8 +20,8 @@ if not defined PYTHON (
     exit /b 1
 )
 
-:: Verify Flask is installed
-"%PYTHON%" -c "import flask" >nul 2>&1
+:: Verify every runtime dependency is installed
+"%PYTHON%" -c "import flask, openpyxl, requests, gspread, google.auth" >nul 2>&1
 if errorlevel 1 (
     echo   [INFO] Installing required packages...
     "%PYTHON%" -m pip install -r requirements.txt
@@ -46,10 +46,7 @@ if not exist "%SHORTCUT%" (
     echo.
 )
 
-:: Store data in the same folder as the app
-set "FINTRACK_DATA_DIR=%~dp0"
-
-echo   Data folder : %FINTRACK_DATA_DIR%
+echo   Data backend: Local data.xlsx + Google Sheets expense inbox
 echo   Server      : http://localhost:5000
 echo.
 
