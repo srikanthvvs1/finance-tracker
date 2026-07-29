@@ -7,3 +7,10 @@ config/drive_token.pickle
 *.up_running
 __pycache__/
 *.pyc
+
+# Android / Gradle
+android/.gradle/
+android/.idea/
+android/local.properties
+android/**/build/
+*.iml
