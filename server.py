@@ -12,6 +12,7 @@ Open: http://localhost:5000
 """
 
 import hashlib
+import calendar
 import os
 import re
 import shutil
@@ -65,6 +66,7 @@ EXPENSE_COLS = ["id", "date", "description", "category", "payment", "amount", "a
 INVESTMENT_COLS = [
     "id", "asset", "name", "category", "units", "buyPrice",
     "currentPrice", "date", "marketCap", "riskLevel", "ticker", "schemeCode",
+    "containerAccountId",
 ]
 TRANSACTION_COLS = ["investmentId", "date", "action", "units", "price", "accountId"]
 SAVINGS_HIST_COLS = [
@@ -84,10 +86,21 @@ NET_WORTH_COLS = [
 ]
 CASH_FLOW_COLS = ["month", "openingBalance", "otherIncome", "safetyBalance"]
 ACCOUNT_COLS = [
-    "id", "name", "bank", "purpose", "openingBalance", "statementBalance",
-    "includeNetWorth", "active",
+    "id", "name", "bank", "type", "classification", "purpose", "currency", "openingDate",
+    "openingBalance", "statementBalance", "creditLimit", "includeNetWorth", "active",
 ]
 TRANSFER_COLS = ["id", "date", "fromAccountId", "toAccountId", "amount", "note"]
+RECONCILIATION_ADJUSTMENT_COLS = [
+    "id", "accountId", "date", "amount", "reason", "createdAt",
+]
+RECURRING_RULE_COLS = [
+    "id", "name", "type", "frequency", "day", "amount", "fromAccountId",
+    "investmentId", "startDate", "endDate", "active",
+]
+RECURRING_OCCURRENCE_COLS = [
+    "id", "ruleId", "scheduledDate", "status", "actualDate", "actualAmount",
+    "units", "price", "note",
+]
 
 PLANNING_SHEETS = {
     "Budgets": BUDGET_COLS,
@@ -96,6 +109,9 @@ PLANNING_SHEETS = {
     "CashFlow": CASH_FLOW_COLS,
     "Accounts": ACCOUNT_COLS,
     "Transfers": TRANSFER_COLS,
+    "ReconciliationAdjustments": RECONCILIATION_ADJUSTMENT_COLS,
+    "RecurringRules": RECURRING_RULE_COLS,
+    "RecurringOccurrences": RECURRING_OCCURRENCE_COLS,
 }
 
 
@@ -260,14 +276,20 @@ def _ensure_workbook():
     _create_sheet("RecurringBills", RECURRING_BILL_COLS, widths=[12, 28, 18, 16, 12, 14, 12])
     _create_sheet("NetWorth", NET_WORTH_COLS, widths=[14, 16, 16, 16, 16, 16, 16, 16, 18])
     _create_sheet("CashFlow", CASH_FLOW_COLS, widths=[14, 18, 16, 18])
-    _create_sheet("Accounts", ACCOUNT_COLS, widths=[12, 24, 18, 18, 18, 18, 18, 12])
+    _create_sheet("Accounts", ACCOUNT_COLS, widths=[12, 24, 18, 18, 16, 18, 12, 14, 18, 18, 16, 18, 12])
     _create_sheet("Transfers", TRANSFER_COLS, widths=[12, 14, 18, 18, 16, 30])
+    _create_sheet(
+        "ReconciliationAdjustments", RECONCILIATION_ADJUSTMENT_COLS,
+        widths=[18, 14, 14, 18, 42, 24],
+    )
+    _create_sheet("RecurringRules", RECURRING_RULE_COLS, widths=[12, 28, 14, 14, 10, 16, 18, 18, 14, 14, 12])
+    _create_sheet("RecurringOccurrences", RECURRING_OCCURRENCE_COLS, widths=[24, 12, 16, 14, 16, 18, 14, 16, 32])
 
     _safe_save(wb)
     print("[OK] Created empty data.xlsx workbook")
 
 # Columns that hold date values (written as Excel dates, read back as ISO strings)
-DATE_COLUMNS = {"date", "deadline"}
+DATE_COLUMNS = {"date", "deadline", "openingDate"}
 DATE_FMT = "YYYY-MM-DD"   # Excel custom number format
 
 
@@ -476,6 +498,10 @@ def _sync_form_expenses():
                 ),
                 None,
             )
+            if default_spending_account is None:
+                raise RuntimeError(
+                    "Add an active Spending account before importing form expenses"
+                )
             existing = {_expense_fingerprint(item) for item in local_expenses}
             next_id = max((int(item.get("id") or 0) for item in local_expenses), default=0)
             additions = []
@@ -580,8 +606,27 @@ def save_expenses():
     data = request.get_json(force=True)
     if not isinstance(data, list):
         return jsonify({"error": "Expected array"}), 400
-    _write_sheet("Expenses", EXPENSE_COLS, data)
-    return jsonify({"ok": True, "count": len(data)})
+    account_ids = {
+        int(row["id"]) for row in _read_sheet("Accounts", ACCOUNT_COLS) if row.get("id")
+    }
+    cleaned = []
+    for row in data:
+        if not isinstance(row, dict):
+            return jsonify({"error": "Invalid expense"}), 400
+        try:
+            amount = float(row.get("amount") or 0)
+            account_id = int(row.get("accountId"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "Each expense requires a paying account and numeric amount"}), 400
+        if amount <= 0 or account_id not in account_ids or not row.get("date"):
+            return jsonify({"error": "Expense requires a date, positive amount, and valid paying account"}), 400
+        cleaned.append({
+            **{column: row.get(column) for column in EXPENSE_COLS},
+            "amount": amount,
+            "accountId": account_id,
+        })
+    _write_sheet("Expenses", EXPENSE_COLS, cleaned)
+    return jsonify({"ok": True, "count": len(cleaned)})
 
 
 @app.route("/api/sync-form-expenses", methods=["POST"])
@@ -616,6 +661,7 @@ def get_investments():
         r["units"] = float(r["units"]) if r["units"] else 0
         r["buyPrice"] = float(r["buyPrice"]) if r["buyPrice"] else 0
         r["currentPrice"] = float(r["currentPrice"]) if r["currentPrice"] else 0
+        r["containerAccountId"] = int(r["containerAccountId"]) if r.get("containerAccountId") else None
         r["transactions"] = []
 
     inv_map = {r["id"]: r for r in invs}
@@ -639,6 +685,16 @@ def save_investments():
     if not isinstance(data, list):
         return jsonify({"error": "Expected array"}), 400
 
+    account_rows = _read_sheet("Accounts", ACCOUNT_COLS)
+    account_types = {
+        int(row["id"]): str(row.get("type") or "bank_savings")
+        for row in account_rows if row.get("id")
+    }
+    category_account_types = {
+        "stocks": {"demat"}, "foreign_stocks": {"demat"},
+        "mutual_funds": {"mutual_fund"}, "gold": {"gold"},
+        "ppf": {"ppf"}, "nps": {"nps"}, "fixed_deposit": {"fixed_deposit"},
+    }
     inv_rows = []
     txn_rows = []
     for inv in data:
@@ -652,6 +708,16 @@ def save_investments():
             return jsonify({"error": "Investment amounts must be numeric"}), 400
         if min(units, buy_price, current_price) < 0:
             return jsonify({"error": "Investment amounts cannot be negative"}), 400
+        container_id = inv.get("containerAccountId")
+        if container_id:
+            try:
+                container_id = int(container_id)
+            except (TypeError, ValueError):
+                return jsonify({"error": "Invalid investment account"}), 400
+            allowed_types = category_account_types.get(str(inv.get("category")), set())
+            if account_types.get(container_id) not in allowed_types:
+                return jsonify({"error": "Holding is linked to an incompatible investment account"}), 400
+            inv["containerAccountId"] = container_id
         inv_rows.append({c: inv.get(c) for c in INVESTMENT_COLS})
         for txn in inv.get("transactions", []):
             action = str(txn.get("action") or "").upper()
@@ -917,6 +983,15 @@ def get_accounts():
         row["id"] = int(row["id"]) if row.get("id") else 0
         row["openingBalance"] = float(row["openingBalance"] or 0)
         row["statementBalance"] = float(row["statementBalance"] or 0)
+        row["creditLimit"] = float(row["creditLimit"] or 0)
+        row["type"] = str(row.get("type") or "bank_savings")
+        row["classification"] = str(row.get("classification") or (
+            "liability" if row["type"] in {"credit_card", "loan"}
+            else "investment" if row["type"] in {
+                "demat", "mutual_fund", "gold", "ppf", "nps", "fixed_deposit"
+            } else "asset"
+        ))
+        row["currency"] = str(row.get("currency") or "INR")
     return jsonify(rows)
 
 
@@ -927,24 +1002,50 @@ def save_accounts():
         return jsonify({"error": "Expected array"}), 400
     cleaned = []
     valid_purposes = {"salary", "investment", "spending", "savings", "other"}
+    valid_types = {
+        "bank_savings", "bank_current", "cash", "credit_card", "wallet",
+        "store", "demat", "mutual_fund", "gold", "ppf", "nps", "fixed_deposit",
+        "loan", "other",
+    }
+    investment_types = {"demat", "mutual_fund", "gold", "ppf", "nps", "fixed_deposit"}
     for row in data:
         if not isinstance(row, dict) or not row.get("id") or not str(row.get("name") or "").strip():
             return jsonify({"error": "Each account requires id and name"}), 400
         purpose = str(row.get("purpose") or "other").lower()
         if purpose not in valid_purposes:
             return jsonify({"error": "Invalid account purpose"}), 400
+        account_type = str(row.get("type") or "bank_savings").lower()
+        if account_type not in valid_types:
+            return jsonify({"error": "Invalid account type"}), 400
+        classification = (
+            "liability" if account_type in {"credit_card", "loan"}
+            else "investment" if account_type in investment_types
+            else "asset"
+        )
         try:
             opening = float(row.get("openingBalance") or 0)
             statement = float(row.get("statementBalance") or 0)
+            credit_limit = float(row.get("creditLimit") or 0)
         except (TypeError, ValueError):
             return jsonify({"error": "Account balances must be numeric"}), 400
+        opening_date = str(row.get("openingDate") or "").strip()
+        if opening_date:
+            try:
+                datetime.strptime(opening_date, "%Y-%m-%d")
+            except ValueError:
+                return jsonify({"error": "Tracking start date must use YYYY-MM-DD"}), 400
         cleaned.append({
             **{column: row.get(column) for column in ACCOUNT_COLS},
             "name": str(row["name"]).strip(),
             "bank": str(row.get("bank") or "").strip(),
+            "type": account_type,
+            "classification": classification,
             "purpose": purpose,
+            "currency": str(row.get("currency") or "INR").upper(),
+            "openingDate": opening_date,
             "openingBalance": opening,
             "statementBalance": statement,
+            "creditLimit": credit_limit,
         })
     _write_sheet("Accounts", ACCOUNT_COLS, cleaned)
     return jsonify({"ok": True, "count": len(cleaned)})
@@ -993,6 +1094,222 @@ def save_transfers():
 
 
 # ═══════════════════════════════════════════════════════════════
+#  API: ACCOUNT RECONCILIATION ADJUSTMENTS
+# =============================================================================
+
+@app.route("/api/reconciliation-adjustments", methods=["GET"])
+def get_reconciliation_adjustments():
+    rows = _read_sheet("ReconciliationAdjustments", RECONCILIATION_ADJUSTMENT_COLS)
+    for row in rows:
+        row["accountId"] = int(row["accountId"]) if row.get("accountId") else None
+        row["amount"] = float(row["amount"] or 0)
+    return jsonify(rows)
+
+
+@app.route("/api/reconciliation-adjustments", methods=["POST"])
+def save_reconciliation_adjustments():
+    data = request.get_json(force=True)
+    if not isinstance(data, list):
+        return jsonify({"error": "Expected array"}), 400
+    account_ids = {
+        int(row["id"]) for row in _read_sheet("Accounts", ACCOUNT_COLS) if row.get("id")
+    }
+    cleaned = []
+    for row in data:
+        try:
+            account_id = int(row.get("accountId"))
+            amount = float(row.get("amount"))
+            datetime.strptime(str(row.get("date")), "%Y-%m-%d")
+        except (TypeError, ValueError, AttributeError):
+            return jsonify({"error": "Invalid reconciliation adjustment"}), 400
+        reason = str(row.get("reason") or "").strip()
+        if account_id not in account_ids or amount == 0 or not reason:
+            return jsonify({
+                "error": "Adjustment requires a valid account, non-zero amount, date, and reason"
+            }), 400
+        cleaned.append({
+            "id": str(row.get("id") or ""),
+            "accountId": account_id,
+            "date": row.get("date"),
+            "amount": amount,
+            "reason": reason,
+            "createdAt": str(row.get("createdAt") or datetime.now().isoformat(timespec="seconds")),
+        })
+    _write_sheet("ReconciliationAdjustments", RECONCILIATION_ADJUSTMENT_COLS, cleaned)
+    return jsonify({"ok": True, "count": len(cleaned)})
+
+
+#  API: RECURRING INVESTMENT RULES / CATCH-UP OCCURRENCES
+# =============================================================================
+
+def _scheduled_dates(rule, through_date):
+    """Return every due date for a rule through the supplied date."""
+    try:
+        start = _to_date(rule.get("startDate"))
+        end = _to_date(rule.get("endDate")) if rule.get("endDate") else through_date
+        day = max(1, min(31, int(rule.get("day") or start.day)))
+    except (TypeError, ValueError, AttributeError):
+        return []
+    if not isinstance(start, date):
+        return []
+    end = min(end, through_date) if isinstance(end, date) else through_date
+    step = {"monthly": 1, "quarterly": 3, "yearly": 12}.get(
+        str(rule.get("frequency") or "monthly").lower()
+    )
+    if not step:
+        return []
+    year, month = start.year, start.month
+    dates = []
+    while date(year, month, 1) <= end:
+        scheduled = date(year, month, min(day, calendar.monthrange(year, month)[1]))
+        if start <= scheduled <= end:
+            dates.append(scheduled)
+        month += step
+        year += (month - 1) // 12
+        month = (month - 1) % 12 + 1
+    return dates
+
+
+@app.route("/api/recurring-rules", methods=["GET"])
+def get_recurring_rules():
+    rows = _read_sheet("RecurringRules", RECURRING_RULE_COLS)
+    for row in rows:
+        row["id"] = int(row["id"]) if row.get("id") else 0
+        row["day"] = int(row["day"] or 1)
+        row["amount"] = float(row["amount"] or 0)
+        row["fromAccountId"] = int(row["fromAccountId"]) if row.get("fromAccountId") else None
+        row["investmentId"] = int(row["investmentId"]) if row.get("investmentId") else None
+    return jsonify(rows)
+
+
+@app.route("/api/recurring-rules", methods=["POST"])
+def save_recurring_rules():
+    data = request.get_json(force=True)
+    if not isinstance(data, list):
+        return jsonify({"error": "Expected array"}), 400
+    account_ids = {int(row["id"]) for row in _read_sheet("Accounts", ACCOUNT_COLS) if row.get("id")}
+    investment_ids = {int(row["id"]) for row in _read_sheet("Investments", INVESTMENT_COLS) if row.get("id")}
+    cleaned = []
+    for row in data:
+        try:
+            rule_id = int(row.get("id")); day = int(row.get("day"))
+            amount = float(row.get("amount")); from_id = int(row.get("fromAccountId"))
+            investment_id = int(row.get("investmentId"))
+            datetime.strptime(str(row.get("startDate")), "%Y-%m-%d")
+        except (TypeError, ValueError, AttributeError):
+            return jsonify({"error": "Invalid recurring rule"}), 400
+        frequency = str(row.get("frequency") or "monthly").lower()
+        if (not str(row.get("name") or "").strip() or day < 1 or day > 31
+                or amount <= 0 or from_id not in account_ids
+                or investment_id not in investment_ids
+                or frequency not in {"monthly", "quarterly", "yearly"}):
+            return jsonify({"error": "Recurring rule has invalid fields"}), 400
+        cleaned.append({
+            "id": rule_id, "name": str(row["name"]).strip(), "type": "sip",
+            "frequency": frequency, "day": day, "amount": amount,
+            "fromAccountId": from_id, "investmentId": investment_id,
+            "startDate": row.get("startDate"), "endDate": row.get("endDate") or "",
+            "active": row.get("active") is not False,
+        })
+    _write_sheet("RecurringRules", RECURRING_RULE_COLS, cleaned)
+    return jsonify({"ok": True, "count": len(cleaned)})
+
+
+@app.route("/api/recurring-occurrences", methods=["GET"])
+def get_recurring_occurrences():
+    rows = _read_sheet("RecurringOccurrences", RECURRING_OCCURRENCE_COLS)
+    for row in rows:
+        row["ruleId"] = int(row["ruleId"]) if row.get("ruleId") else 0
+        for column in ("actualAmount", "units", "price"):
+            row[column] = float(row[column] or 0)
+    return jsonify(rows)
+
+
+@app.route("/api/recurring-occurrences/generate", methods=["POST"])
+def generate_recurring_occurrences():
+    rules = _read_sheet("RecurringRules", RECURRING_RULE_COLS)
+    rows = _read_sheet("RecurringOccurrences", RECURRING_OCCURRENCE_COLS)
+    existing = {str(row.get("id")) for row in rows}; created = 0
+    for rule in rules:
+        if rule.get("active") is False or str(rule.get("active")).lower() == "false":
+            continue
+        rule_id = int(rule.get("id") or 0)
+        for scheduled in _scheduled_dates(rule, date.today()):
+            occurrence_id = f"{rule_id}:{scheduled.isoformat()}"
+            if occurrence_id in existing:
+                continue
+            rows.append({
+                "id": occurrence_id, "ruleId": rule_id,
+                "scheduledDate": scheduled.isoformat(), "status": "pending",
+                "actualDate": "", "actualAmount": 0, "units": 0, "price": 0, "note": "",
+            })
+            existing.add(occurrence_id); created += 1
+    if created:
+        _write_sheet("RecurringOccurrences", RECURRING_OCCURRENCE_COLS, rows)
+    pending = sum(1 for row in rows if str(row.get("status") or "").lower() == "pending")
+    return jsonify({"ok": True, "created": created, "pending": pending})
+
+
+@app.route("/api/recurring-occurrences/<path:occurrence_id>/action", methods=["POST"])
+def recurring_occurrence_action(occurrence_id):
+    body = request.get_json(force=True); action = str(body.get("action") or "").lower()
+    occurrences = _read_sheet("RecurringOccurrences", RECURRING_OCCURRENCE_COLS)
+    occurrence = next((row for row in occurrences if str(row.get("id")) == occurrence_id), None)
+    if not occurrence or str(occurrence.get("status") or "").lower() != "pending":
+        return jsonify({"error": "Pending occurrence not found"}), 404
+    if action == "skip":
+        occurrence["status"] = "skipped"; occurrence["note"] = str(body.get("note") or "").strip()
+        _write_sheet("RecurringOccurrences", RECURRING_OCCURRENCE_COLS, occurrences)
+        return jsonify({"ok": True, "status": "skipped"})
+    if action != "confirm":
+        return jsonify({"error": "Action must be confirm or skip"}), 400
+    rules = _read_sheet("RecurringRules", RECURRING_RULE_COLS)
+    rule = next((row for row in rules if int(row.get("id") or 0) == int(occurrence.get("ruleId") or 0)), None)
+    if not rule:
+        return jsonify({"error": "Recurring rule not found"}), 404
+    try:
+        actual_date = str(body.get("actualDate") or occurrence.get("scheduledDate"))
+        datetime.strptime(actual_date, "%Y-%m-%d")
+        amount = float(body.get("actualAmount") or rule.get("amount") or 0)
+        price = float(body.get("price") or 0)
+        units = float(body.get("units") or (amount / price if price > 0 else 1))
+    except (TypeError, ValueError, ZeroDivisionError):
+        return jsonify({"error": "Invalid confirmation values"}), 400
+    if amount <= 0 or units <= 0 or price <= 0:
+        return jsonify({"error": "Amount, units, and price must be positive"}), 400
+    investments = _read_sheet("Investments", INVESTMENT_COLS)
+    transactions = _read_sheet("Transactions", TRANSACTION_COLS)
+    investment_id = int(rule.get("investmentId") or 0)
+    investment = next((row for row in investments if int(row.get("id") or 0) == investment_id), None)
+    if not investment:
+        return jsonify({"error": "Linked investment not found"}), 404
+    category = str(investment.get("category") or "")
+    action_name = "DEPOSIT" if category in {"ppf", "fixed_deposit"} else "BUY"
+    if action_name == "BUY" and abs((units * price) - amount) > max(1.0, amount * 0.001):
+        return jsonify({"error": "Amount must match units multiplied by price"}), 400
+    txn_units = 1 if action_name == "DEPOSIT" else units
+    txn_price = amount if action_name == "DEPOSIT" else price
+    transactions.append({
+        "investmentId": investment_id, "date": actual_date, "action": action_name,
+        "units": txn_units, "price": txn_price, "accountId": int(rule.get("fromAccountId")),
+    })
+    if action_name == "BUY":
+        old_units = float(investment.get("units") or 0)
+        old_cost = old_units * float(investment.get("buyPrice") or 0)
+        investment["units"] = old_units + units
+        investment["buyPrice"] = (old_cost + amount) / investment["units"]
+    occurrence.update({
+        "status": "confirmed", "actualDate": actual_date, "actualAmount": amount,
+        "units": txn_units, "price": txn_price, "note": str(body.get("note") or "").strip(),
+    })
+    _write_sheets([
+        ("Investments", INVESTMENT_COLS, investments),
+        ("Transactions", TRANSACTION_COLS, transactions),
+        ("RecurringOccurrences", RECURRING_OCCURRENCE_COLS, occurrences),
+    ])
+    return jsonify({"ok": True, "status": "confirmed"})
+
+
 #  API: PRICE PROXY  (solves CORS — Python fetches directly)
 # ═══════════════════════════════════════════════════════════════
 

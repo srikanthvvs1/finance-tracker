@@ -12,6 +12,10 @@ server starts.
 FinTrack starts with an empty workbook. It does not create sample or dummy
 financial records.
 
+For a field-by-field explanation of every visible section, including formulas,
+worked examples, account sign rules, and reconciliation behavior, read
+[FinTrack Calculations and Label Guide](docs/CALCULATIONS_AND_LABELS.md).
+
 ## Contents
 
 1. [What FinTrack helps you answer](#what-fintrack-helps-you-answer)
@@ -99,6 +103,9 @@ FinTrack uses one canonical server: `server.py`.
 | Cash-flow settings | `data.xlsx` → `CashFlow` |
 | Account labels and reconciliation balances | `data.xlsx` → `Accounts` |
 | Internal account transfers | `data.xlsx` → `Transfers` |
+| Dated balance corrections and their reasons | `data.xlsx` → `ReconciliationAdjustments` |
+| Recurring investment rules | `data.xlsx` → `RecurringRules` |
+| Generated recurring reviews | `data.xlsx` → `RecurringOccurrences` |
 | Uploaded documents | Local `documents/` directory |
 | Incoming Google Form expenses | Google Sheet → `FormExpenses` |
 
@@ -114,9 +121,8 @@ financial position.
 
 ### Summary cards
 
-- **Net Worth** — assets minus liabilities from the selected month's saved
-  net-worth snapshot. If no snapshot exists yet, the card temporarily shows
-  the current tracked investment value.
+- **Net Worth** — current tracked asset and investment-account balances minus
+  credit-card and loan balances. Unassigned legacy holdings are also included.
 - **Monthly Income** — income recorded for the selected month. Click the value
   to create or update it.
 - **Monthly Expenses** — total expense transactions dated in the selected
@@ -130,13 +136,11 @@ being counted twice.
 
 ### Financial direction summary
 
-The sentence below the cards combines several signals into plain language:
+The sentence below the cards combines account-linked signals into plain language:
 
 - current savings rate;
 - spending change from the previous month;
-- remaining or exceeded budget;
-- upcoming recurring bills; and
-- a warning when forecast cash falls below the chosen safety balance.
+- number of active accounts feeding the view.
 
 It is a summary of entered data, not financial advice.
 
@@ -329,29 +333,38 @@ medical costs, urgent repairs, or loss of income.
   monthly expenses over the latest three selected months. It appears in the
   Financial Plan summary.
 
-## Financial Plan
+## Accounts
 
-The Financial Plan section converts historical records into forward-looking
-information for the selected month.
+Accounts are the foundation of FinTrack. Income, expenses, transfers, and
+investment transactions are assigned to accounts so balances describe where
+money is held and how it moved.
 
 ### Accounts and Internal Transfers
 
-Accounts are optional labels for where money is held. Store only a friendly
-name, bank name, purpose, and balances - never an account number, password,
-PIN, OTP, or banking credential.
+Store only a friendly name, institution, purpose, and optional masked
+identifier - never an account number, password, PIN, OTP, or banking
+credential.
 
 Each account has:
 
+- **Type** - savings/current bank, cash, credit card, wallet, store account,
+  Demat, mutual fund, gold, PPF, NPS, fixed deposit, loan, or other;
+- **Classification** - asset, liability, or investment, derived from its type;
 - **Purpose** - Salary, Investment, Spending, Savings, or Other;
-- **Opening Balance** - starting point before account-attributed tracker
-  activity;
-- **Tracked Balance** - opening balance plus attributed income and incoming
-  transfers, minus attributed expenses, investments, and outgoing transfers;
-- **Latest Bank Balance** - the balance manually copied from the bank; and
-- **Difference** - bank balance minus tracked balance, used for reconciliation.
+- **Tracking Start Date** - the date from which FinTrack includes linked
+  activity for that account;
+- **Starting Balance** - the real balance already present at the start of that
+  date;
+- **FinTrack-calculated Balance** - starting balance plus every linked money
+  movement from the tracking start date;
+- **Current Bank/Card Balance** - the latest balance manually copied from the
+  institution; and
+- **Unexplained Gap** - the amount still missing from, or extra in, FinTrack.
 
-An internal transfer decreases one tracked account and increases another. It
-does not change income, expenses, savings, or net worth.
+For asset accounts, incoming money increases the balance and outgoing money
+decreases it. For credit cards and loans, charges increase the amount owed and
+payments reduce it. An internal transfer updates both accounts without being
+classified as income or spending.
 
 Example:
 
@@ -363,12 +376,53 @@ Axis to Kotak                   = Internal transfer
 Kotak grocery payment           = Expense paid from Kotak Spending
 ```
 
-New income defaults to the active Salary account, new expenses default to the
-active Spending account, and new investment contributions default to the
-active Investment account. These assignments can be changed in their forms.
-Existing historical records remain unassigned until deliberately reconciled.
+Use **Review balance** on an account to reconcile it:
 
-### Budget Used
+1. Enter the current balance shown by the bank or card.
+2. If FinTrack started after the account already contained money, save the
+   correct tracking start date and balance at the start of that date.
+3. If an old transaction cannot be recovered, add a dated exceptional
+   adjustment with a reason. FinTrack keeps it in the account ledger and in the
+   `ReconciliationAdjustments` worksheet with its creation time.
+
+Starting positions are account setup data. Adjustments are explicit ledger
+corrections and should not be used for ordinary income, expenses, transfers, or
+investments.
+
+New income requires an active Salary account. Expenses require a paying
+account. Investment purchases require both a funding account and a compatible
+investment account: Demat for stocks, mutual-fund account for funds, or the
+matching PPF, NPS, gold, or fixed-deposit account. Creating a new investment
+account automatically links compatible unassigned legacy holdings.
+
+### Recurring investments and catch-up
+
+Recurring rules automate expected SIP and other periodic investment
+contributions without requiring FinTrack to remain running. A rule stores the
+holding, funding account, frequency, due day, expected amount, and start date.
+
+Whenever FinTrack opens, it calculates every scheduled date through today and
+creates missing occurrences as **Pending**. Each occurrence uses `rule ID +
+scheduled date`, so reopening the application does not create duplicates.
+
+Pending occurrences appear under **Accounts → Recurring Investments** and in
+the Dashboard **Action items** count. Confirmation asks for the actual date,
+amount, NAV or price, and allotted units before creating the real investment
+transaction. Skipping records the occurrence without changing balances. Rules
+can be paused and resumed.
+
+```text
+Recurring rule = expected movement
+Confirmed occurrence = actual ledger and investment transaction
+```
+
+### Legacy planning data
+
+Budget, recurring-bill, manual net-worth snapshot, and cash-flow forecast
+worksheets remain readable through the API for backward compatibility, but
+their forms are no longer shown in the account-centered interface.
+
+### Budget Used (legacy)
 
 A **budget** is the maximum amount you plan to spend in a category during one
 month.
@@ -382,7 +436,7 @@ month.
 **Copy Previous Month** duplicates the previous month's category limits into
 the selected month. It replaces any budgets already entered for that month.
 
-### Recurring Bills
+### Recurring Bills (legacy)
 
 A recurring bill is a payment expected repeatedly, such as rent, internet, an
 EMI, insurance, or a subscription.
@@ -401,7 +455,7 @@ expense are different records.
 The forecast subtracts Remaining Budget plus only those upcoming bills marked
 as not included in a category budget.
 
-### Net-Worth Snapshot
+### Net-Worth Snapshot (legacy)
 
 **Net Worth** measures what you own minus what you owe at one point in time.
 
@@ -429,7 +483,7 @@ Save one snapshot each month to see direction over time. A rising net worth
 normally indicates improving financial position, but asset values and debt
 changes should be reviewed separately.
 
-### Cash-Flow Forecast
+### Cash-Flow Forecast (legacy)
 
 Cash flow describes money expected to enter and leave during a period.
 
@@ -456,7 +510,7 @@ A warning appears when Forecast Balance is below Safety Balance.
 This is a planning estimate. It is only as accurate as the income, budgets,
 bills, and opening cash entered.
 
-## Documents
+## Documents (legacy)
 
 The Documents section stores financial files locally.
 
@@ -467,7 +521,9 @@ The Documents section stores financial files locally.
 - **Download** opens or saves a stored file.
 - **Delete** permanently removes the selected document.
 
-Documents are not stored in Google Drive by the current version.
+The Documents interface is hidden in the account-centered version. Existing
+files and API endpoints are preserved. Documents are not stored in Google
+Drive by the current version.
 
 ### Local server and backup settings
 

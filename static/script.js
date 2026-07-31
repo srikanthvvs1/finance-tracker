@@ -13,6 +13,9 @@ let netWorthHistory = [];
 let cashFlowSettings = [];
 let accounts = [];
 let transfers = [];
+let recurringRules = [];
+let recurringOccurrences = [];
+let reconciliationAdjustments = [];
 
 /* ── Server API base URL (relative — works on any host/port) ── */
 const API_BASE = '/api';
@@ -37,7 +40,7 @@ async function apiPost(path, body) {
 /* ── Load all data from server (Excel is the single source of truth) ── */
 async function loadAllData() {
   try {
-    const [exp, inv, sh, sg, ef, budgetRows, billRows, netWorthRows, cashFlowRows, accountRows, transferRows] = await Promise.all([
+    const [exp, inv, sh, sg, ef, budgetRows, billRows, netWorthRows, cashFlowRows, accountRows, transferRows, ruleRows, occurrenceRows, adjustmentRows] = await Promise.all([
       apiGet('/expenses'),
       apiGet('/investments'),
       apiGet('/savings-history'),
@@ -49,6 +52,9 @@ async function loadAllData() {
       apiGet('/cash-flow'),
       apiGet('/accounts'),
       apiGet('/transfers'),
+      apiGet('/recurring-rules'),
+      apiGet('/recurring-occurrences'),
+      apiGet('/reconciliation-adjustments'),
     ]);
     expenses       = exp;
     investments    = inv;
@@ -61,6 +67,9 @@ async function loadAllData() {
     cashFlowSettings = cashFlowRows;
     accounts = accountRows;
     transfers = transferRows;
+    recurringRules = ruleRows;
+    recurringOccurrences = occurrenceRows;
+    reconciliationAdjustments = adjustmentRows;
     serverAvailable = true;
     console.log(`✅ Data loaded from Excel — ${exp.length} expenses, ${inv.length} investments, ${sh.length} savings months, ${sg.length} goals`);
   } catch (e) {
@@ -76,6 +85,9 @@ async function loadAllData() {
     cashFlowSettings = [];
     accounts = [];
     transfers = [];
+    recurringRules = [];
+    recurringOccurrences = [];
+    reconciliationAdjustments = [];
     serverAvailable = false;
   }
 }
@@ -92,6 +104,8 @@ function saveNetWorth()       { if (serverAvailable) return apiPost('/net-worth'
 function saveCashFlow()       { if (serverAvailable) return apiPost('/cash-flow', cashFlowSettings); }
 function saveAccounts()       { if (serverAvailable) return apiPost('/accounts', accounts); }
 function saveTransfers()      { if (serverAvailable) return apiPost('/transfers', transfers); }
+function saveRecurringRules() { if (serverAvailable) return apiPost('/recurring-rules', recurringRules); }
+function saveReconciliationAdjustments() { if (serverAvailable) return apiPost('/reconciliation-adjustments', reconciliationAdjustments); }
 
 /* ── Sync form expenses (Google Form → main Expenses sheet) ── */
 async function syncFormExpenses() {
@@ -356,8 +370,8 @@ const sectionMeta = {
   dashboard:   ['Dashboard',   'Overview of your finances'],
   expenses:    ['Expenses',    'Track and manage your spending'],
   investments: ['Investments', 'Monitor your investment portfolio'],
-  savings:     ['Savings',     'Your savings goals and history'],
-  planning:    ['Financial Plan', 'Budgets, bills, net worth and cash-flow forecast'],
+  savings:     ['Income & Flow', 'Monthly income, spending, investing and retained cash'],
+  planning:    ['Accounts', 'Balances and every movement between your financial accounts'],
   stocks:      ['Stocks & Mutual Funds', 'Detailed portfolio analytics'],
   otherinv:    ['Other Investments', 'Gold, PPF, NPS & Fixed Deposits'],
   documents:   ['Documents',   'Salary slips, tax, insurance & more'],
@@ -388,12 +402,13 @@ function navigateTo(section) {
   const isInvPage = (section === 'investments' || isSubPage);
   const isDocPage = (section === 'documents');
   const isPlanningPage = (section === 'planning');
+  const isFlowPage = (section === 'savings');
   const monthSel   = document.getElementById('headerMonthSelector');
   const addBtn     = document.getElementById('addEntryBtn');
   const refreshBtn = document.getElementById('headerRefreshBtn');
   const refreshSt  = document.getElementById('headerRefreshStatus');
   if (monthSel)   monthSel.style.display   = (isInvPage || isDocPage) ? 'none' : '';
-  if (addBtn)     addBtn.style.display     = (isInvPage || isDocPage || isPlanningPage) ? 'none' : '';
+  if (addBtn)     addBtn.style.display     = (isInvPage || isDocPage || isPlanningPage || isFlowPage) ? 'none' : '';
   if (refreshBtn) refreshBtn.style.display = isInvPage ? '' : 'none';
   if (refreshSt)  refreshSt.style.display  = isInvPage ? '' : 'none';
 
@@ -406,6 +421,11 @@ document.querySelectorAll('.nav-item').forEach(item => {
 
 document.querySelectorAll('.view-all').forEach(link => {
   link.addEventListener('click', e => { e.preventDefault(); navigateTo(link.dataset.section); });
+});
+
+document.getElementById('dashboardActionItems')?.addEventListener('click', () => {
+  navigateTo('planning');
+  document.getElementById('recurringAutomationCard')?.scrollIntoView({ behavior: 'smooth' });
 });
 
 
@@ -690,7 +710,6 @@ function openExpenseModalForEdit(id) {
   form.category.value    = exp.category;
   form.payment.value     = exp.payment || 'upi';
   form.accountId.value   = exp.accountId || '';
-  if (form.notes) form.notes.value = exp.notes || '';
   // Update modal title & button
   const modal = document.getElementById('expenseModal');
   modal.querySelector('.modal-header h2').textContent = 'Edit Expense';
@@ -834,6 +853,21 @@ document.getElementById('invType')?.addEventListener('change', e => {
   if (dynFields) dynFields.style.display = cat ? '' : 'none';
   if (!cat) return;
 
+  const requiredAccountType = {
+    stocks: 'demat', foreign_stocks: 'demat', mutual_funds: 'mutual_fund',
+    gold: 'gold', ppf: 'ppf', nps: 'nps', fixed_deposit: 'fixed_deposit',
+  }[cat];
+  const containerSelect = document.getElementById('invContainerAccount');
+  if (containerSelect) {
+    const matchingAccounts = activeAccounts().filter(
+      account => account.type === requiredAccountType
+    );
+    containerSelect.innerHTML = '<option value="">Select investment account</option>'
+      + matchingAccounts.map(account =>
+        `<option value="${account.id}">${escHtml(account.name)}</option>`
+      ).join('');
+  }
+
   /* Update labels & placeholders */
   const cfg = invFieldCfg[cat] || {};
   const setLabel = (id, txt) => { const el = document.getElementById(id); if (el) el.innerHTML = txt; };
@@ -880,6 +914,7 @@ function renderAfterInvestmentChange() {
   renderInvestmentsTable();
   renderInvestmentSnapshot();
   refreshActiveInvestmentView();
+  renderPlanning();
   renderDashboardCards();
   initCharts();
   navigateTo(activeSection);
@@ -2396,13 +2431,15 @@ function investmentOutflowForYM(mIdx, yr) {
 }
 
 function renderDashboardCards() {
-  /* Investment current value */
-  const invValue = portfolioTotals().currentValue;
-  const selectedSnapshot = netWorthHistory.find(
-    row => row.month === `${MONTHS[currentMonthIdx].slice(0, 3)} ${currentYear}`
-  );
-  const latestSnapshot = selectedSnapshot || netWorthHistory.at(-1);
-  const totalWealth = latestSnapshot ? netWorthValue(latestSnapshot) : invValue;
+  /* Account-led net position, plus any legacy holdings not linked to an account. */
+  let totalWealth = 0;
+  activeAccounts().forEach(account => {
+    const balance = trackedAccountBalance(account);
+    totalWealth += isLiabilityAccount(account) ? -balance : balance;
+  });
+  investments.filter(inv => !inv.containerAccountId).forEach(inv => {
+    totalWealth += investmentMetrics(inv).currentValue;
+  });
 
   /* Selected month data */
   const curRow  = savingsRowForMonth(currentMonthIdx, currentYear);
@@ -2431,7 +2468,9 @@ function renderDashboardCards() {
   el('dashExpenses', fmt(monthlyExpenses));
   el('dashSavings',  fmt(netSavings));
 
-  el('dashWealthChange', latestSnapshot ? `Snapshot: ${latestSnapshot.month}` : 'Add a net-worth snapshot');
+  el('dashWealthChange', activeAccounts().length
+    ? `Calculated from ${activeAccounts().length} active account${activeAccounts().length === 1 ? '' : 's'}`
+    : 'Add accounts to calculate net position');
   cls('dashWealthChange',  'card-change positive');
 
   el('dashIncomeChange',   incChange >= 0 ? `+${fmt(incChange)} vs last month` : `${fmt(incChange)} vs last month`);
@@ -2450,6 +2489,11 @@ function renderDashboardCards() {
     incEl.style.cursor = 'pointer';
     incEl.title = 'Click to edit monthly income';
     incEl.addEventListener('click', () => {
+      if (!defaultAccountId('salary')) {
+        alert('Add an active account with the Salary purpose before recording income.');
+        navigateTo('planning');
+        return;
+      }
       const current = curRow?.income || 0;
       const input = prompt(`Set income for ${MONTHS[currentMonthIdx]} ${currentYear}:`, current);
       if (input === null) return;
@@ -3012,6 +3056,34 @@ function accountName(accountId) {
   return accounts.find(row => Number(row.id) === Number(accountId))?.name || 'Unassigned';
 }
 
+const accountTypeLabels = {
+  bank_savings: 'Savings Bank', bank_current: 'Current Bank', cash: 'Cash',
+  credit_card: 'Credit Card', wallet: 'Wallet', store: 'Store Account',
+  demat: 'Demat / Brokerage', mutual_fund: 'Mutual Fund', gold: 'Gold', ppf: 'PPF',
+  nps: 'NPS', fixed_deposit: 'Fixed Deposit', loan: 'Loan', other: 'Other',
+};
+
+function isLiabilityAccount(account) {
+  return account?.classification === 'liability'
+    || ['credit_card', 'loan'].includes(account?.type);
+}
+
+function isInvestmentAccount(account) {
+  return account?.classification === 'investment'
+    || ['demat', 'mutual_fund', 'gold', 'ppf', 'nps', 'fixed_deposit'].includes(account?.type);
+}
+
+function investmentCategoriesForAccountType(type) {
+  return {
+    demat: ['stocks', 'foreign_stocks'],
+    mutual_fund: ['mutual_funds'],
+    gold: ['gold'],
+    ppf: ['ppf'],
+    nps: ['nps'],
+    fixed_deposit: ['fixed_deposit'],
+  }[type] || [];
+}
+
 function populateAccountSelectors() {
   const configs = {
     expAccount: 'spending',
@@ -3020,6 +3092,7 @@ function populateAccountSelectors() {
     accountTransactionAccount: 'investment',
     transferFrom: null,
     transferTo: null,
+    invContainerAccount: null,
   };
   Object.entries(configs).forEach(([id, preferredPurpose]) => {
     const select = document.getElementById(id);
@@ -3030,7 +3103,12 @@ function populateAccountSelectors() {
       : (id === 'expAccount' ? 'Select paying account'
         : id === 'tradeAccount' ? 'Select settlement account'
           : 'Select funding account');
-    select.innerHTML = `<option value="">${placeholder}</option>` + activeAccounts()
+    const selectable = id === 'invContainerAccount'
+      ? activeAccounts().filter(isInvestmentAccount)
+      : ['expAccount', 'invAccount', 'tradeAccount', 'accountTransactionAccount'].includes(id)
+        ? activeAccounts().filter(account => !isInvestmentAccount(account))
+        : activeAccounts();
+    select.innerHTML = `<option value="">${id === 'invContainerAccount' ? 'Select investment account' : placeholder}</option>` + selectable
       .map(row => `<option value="${row.id}">${escHtml(row.name)}${row.bank ? ` · ${escHtml(row.bank)}` : ''}</option>`)
       .join('');
     const preferred = previous || defaultAccountId(preferredPurpose);
@@ -3040,31 +3118,53 @@ function populateAccountSelectors() {
 
 function trackedAccountBalance(account) {
   const id = Number(account.id);
+  const liability = isLiabilityAccount(account);
+  const openingDate = String(account.openingDate || '');
+  const included = value => !openingDate || !value || String(value) >= openingDate;
   let balance = Number(account.openingBalance || 0);
   savingsHistory.forEach(row => {
-    if (Number(row.accountId) === id) balance += Number(row.income || 0);
+    if (Number(row.accountId) === id && included(monthKeyToISO(row.month))) {
+      balance += (liability ? -1 : 1) * Number(row.income || 0);
+    }
   });
   expenses.forEach(row => {
-    if (Number(row.accountId) === id) balance -= Number(row.amount || 0);
+    if (Number(row.accountId) === id && included(row.date)) {
+      balance += (liability ? 1 : -1) * Number(row.amount || 0);
+    }
   });
   transfers.forEach(row => {
-    if (Number(row.fromAccountId) === id) balance -= Number(row.amount || 0);
-    if (Number(row.toAccountId) === id) balance += Number(row.amount || 0);
+    if (!included(row.date)) return;
+    if (Number(row.fromAccountId) === id) balance += (liability ? 1 : -1) * Number(row.amount || 0);
+    if (Number(row.toAccountId) === id) balance += (liability ? -1 : 1) * Number(row.amount || 0);
   });
   investments.forEach(inv => (inv.transactions || []).forEach(tx => {
-    if (Number(tx.accountId) !== id) return;
+    if (Number(tx.accountId) !== id || !included(tx.date)) return;
     const amount = Number(tx.units || 0) * Number(tx.price || 0);
-    if (['BUY', 'DEPOSIT'].includes(tx.action)) balance -= amount;
-    if (['SELL', 'WITHDRAWAL'].includes(tx.action)) balance += amount;
+    if (['BUY', 'DEPOSIT'].includes(tx.action)) balance += (liability ? 1 : -1) * amount;
+    if (['SELL', 'WITHDRAWAL'].includes(tx.action)) balance += (liability ? -1 : 1) * amount;
   }));
+  if (isInvestmentAccount(account)) {
+    investments.filter(inv => Number(inv.containerAccountId) === id).forEach(inv => {
+      balance += investmentMetrics(inv).currentValue;
+    });
+  }
+  reconciliationAdjustments.forEach(row => {
+    if (Number(row.accountId) === id && included(row.date)) {
+      balance += Number(row.amount || 0);
+    }
+  });
   return balance;
 }
 
 function accountLedgerEntries(accountId) {
   const id = Number(accountId);
+  const accountForDate = accounts.find(row => Number(row.id) === id);
+  const openingDate = String(accountForDate?.openingDate || '');
+  const included = value => !openingDate || !value || String(value) >= openingDate;
   const entries = [];
   savingsHistory.forEach(row => {
-    if (Number(row.accountId) === id && Number(row.income || 0) !== 0) {
+    if (Number(row.accountId) === id && Number(row.income || 0) !== 0
+        && included(monthKeyToISO(row.month))) {
       entries.push({
         date: monthKeyToISO(row.month),
         type: 'Income',
@@ -3074,7 +3174,7 @@ function accountLedgerEntries(accountId) {
     }
   });
   expenses.forEach(row => {
-    if (Number(row.accountId) === id) {
+    if (Number(row.accountId) === id && included(row.date)) {
       entries.push({
         date: row.date,
         type: 'Expense',
@@ -3084,6 +3184,7 @@ function accountLedgerEntries(accountId) {
     }
   });
   transfers.forEach(row => {
+    if (!included(row.date)) return;
     if (Number(row.fromAccountId) === id) {
       entries.push({
         date: row.date,
@@ -3102,7 +3203,7 @@ function accountLedgerEntries(accountId) {
     }
   });
   investments.forEach(inv => (inv.transactions || []).forEach(tx => {
-    if (Number(tx.accountId) !== id) return;
+    if (Number(tx.accountId) !== id || !included(tx.date)) return;
     const amount = Number(tx.units || 0) * Number(tx.price || 0);
     if (['BUY', 'DEPOSIT'].includes(tx.action)) {
       entries.push({
@@ -3121,6 +3222,41 @@ function accountLedgerEntries(accountId) {
       });
     }
   }));
+  investments.filter(inv => Number(inv.containerAccountId) === id)
+    .forEach(inv => (inv.transactions || []).forEach(tx => {
+      if (!included(tx.date)) return;
+      const amount = Number(tx.units || 0) * Number(tx.price || 0);
+      if (['BUY', 'DEPOSIT', 'INTEREST'].includes(tx.action)) {
+        entries.push({
+          date: tx.date,
+          type: tx.action === 'INTEREST' ? 'Investment return' : 'Investment in',
+          description: inv.name || inv.asset || 'Investment holding',
+          amount,
+        });
+      }
+      if (['SELL', 'WITHDRAWAL'].includes(tx.action)) {
+        entries.push({
+          date: tx.date,
+          type: 'Investment out',
+          description: inv.name || inv.asset || 'Investment holding',
+          amount: -amount,
+        });
+      }
+    }));
+  const account = accountForDate;
+  if (isLiabilityAccount(account)) {
+    entries.forEach(entry => { entry.amount *= -1; });
+  }
+  reconciliationAdjustments.forEach(row => {
+    if (Number(row.accountId) === id && included(row.date)) {
+      entries.push({
+        date: row.date,
+        type: 'Reconciliation adjustment',
+        description: row.reason || 'Balance correction',
+        amount: Number(row.amount || 0),
+      });
+    }
+  });
   return entries.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
 }
 
@@ -3152,6 +3288,83 @@ function netWorthValue(row) {
   const liabilities = ['loans', 'creditCards', 'otherLiabilities']
     .reduce((sum, key) => sum + Number(row[key] || 0), 0);
   return assets - liabilities;
+}
+
+function recurringRuleName(ruleId) {
+  return recurringRules.find(rule => Number(rule.id) === Number(ruleId))?.name || 'Recurring investment';
+}
+
+function pendingRecurringOccurrences() {
+  return recurringOccurrences
+    .filter(row => String(row.status || '').toLowerCase() === 'pending')
+    .sort((a, b) => String(a.scheduledDate).localeCompare(String(b.scheduledDate)));
+}
+
+async function generateRecurringOccurrences() {
+  if (!serverAvailable) return;
+  await apiPost('/recurring-occurrences/generate', {});
+  recurringOccurrences = await apiGet('/recurring-occurrences');
+  renderRecurringAutomation();
+  renderDashboardActionItems();
+}
+
+function renderDashboardActionItems() {
+  const count = pendingRecurringOccurrences().length;
+  const text = document.getElementById('dashboardActionItemsText');
+  const card = document.getElementById('dashboardActionItems');
+  if (text) text.textContent = count
+    ? `${count} recurring transaction${count === 1 ? '' : 's'} waiting for review.`
+    : 'No pending recurring transactions.';
+  if (card) card.classList.toggle('forecast-warning', count > 0);
+}
+
+function renderRecurringAutomation() {
+  const investmentSelect = document.getElementById('recurringInvestment');
+  if (investmentSelect) {
+    const previous = investmentSelect.value;
+    investmentSelect.innerHTML = '<option value="">Investment holding</option>'
+      + investments.map(inv =>
+        `<option value="${inv.id}">${escHtml(inv.name || inv.asset)} · ${escHtml(accountName(inv.containerAccountId))}</option>`
+      ).join('');
+    investmentSelect.value = previous;
+  }
+  const accountSelect = document.getElementById('recurringFromAccount');
+  if (accountSelect) {
+    const previous = accountSelect.value;
+    accountSelect.innerHTML = '<option value="">Paid from account</option>'
+      + activeAccounts().filter(account => !isInvestmentAccount(account)).map(account =>
+        `<option value="${account.id}">${escHtml(account.name)}</option>`
+      ).join('');
+    accountSelect.value = previous || String(defaultAccountId('investment') || '');
+  }
+  const ruleList = document.getElementById('recurringRuleList');
+  if (ruleList) {
+    ruleList.innerHTML = recurringRules.length ? recurringRules.map(rule => {
+      const inv = investments.find(item => Number(item.id) === Number(rule.investmentId));
+      const active = rule.active !== false && String(rule.active).toLowerCase() !== 'false';
+      return `<div class="planning-row simple">
+        <div><strong>${escHtml(rule.name)}</strong>
+          <span>${escHtml(inv?.name || 'Missing holding')} · ${rule.frequency} on day ${rule.day} · ${fmt(rule.amount)}</span></div>
+        <button class="btn-secondary compact-btn" data-recurring-toggle="${rule.id}" type="button">${active ? 'Pause' : 'Resume'}</button>
+      </div>`;
+    }).join('') : '<p class="planning-empty">No recurring investment rules configured.</p>';
+  }
+  const pendingList = document.getElementById('recurringPendingList');
+  if (pendingList) {
+    const pending = pendingRecurringOccurrences();
+    const pendingHeader = document.getElementById('recurringPendingHeader');
+    if (pendingHeader) pendingHeader.style.display = pending.length ? '' : 'none';
+    pendingList.style.display = pending.length ? 'grid' : 'none';
+    pendingList.innerHTML = pending.length ? pending.map(row => {
+      const rule = recurringRules.find(item => Number(item.id) === Number(row.ruleId));
+      return `<div class="planning-row simple">
+        <div><strong>${escHtml(recurringRuleName(row.ruleId))}</strong>
+          <span>Due ${fmtDate(row.scheduledDate)} · ${fmt(Number(rule?.amount || 0))}</span></div>
+        <button class="btn-primary compact-btn" data-recurring-confirm="${escHtml(row.id)}" type="button">Confirm</button>
+        <button class="btn-secondary compact-btn" data-recurring-skip="${escHtml(row.id)}" type="button">Skip</button>
+      </div>`;
+    }).join('') : '';
+  }
 }
 
 function planningMetrics() {
@@ -3211,24 +3424,15 @@ function renderFinancialSummary() {
   const change = previousSpend > 0 ? (metrics.spent - previousSpend) / previousSpend * 100 : null;
 
   const messages = [];
-  if (!income && !metrics.spent && !metrics.budgetTotal) {
+  if (!income && !metrics.spent && !activeAccounts().length) {
     messages.push(`No financial activity is recorded for ${planningMonthKey()}.`);
   } else {
     if (income > 0) messages.push(`Your savings rate is ${savingsRate.toFixed(1)}%.`);
     if (change !== null) {
       messages.push(`Spending is ${Math.abs(change).toFixed(0)}% ${change > 0 ? 'higher' : 'lower'} than last month.`);
     }
-    if (metrics.budgetTotal > 0) {
-      const used = metrics.spent / metrics.budgetTotal * 100;
-      messages.push(used > 100
-        ? `You are ${fmt(metrics.spent - metrics.budgetTotal)} over budget.`
-        : `${fmt(metrics.remainingBudget)} remains in your monthly budget.`);
-    }
-    if (metrics.upcomingBills.length) {
-      messages.push(`${metrics.upcomingBills.length} upcoming bill${metrics.upcomingBills.length > 1 ? 's' : ''} total ${fmt(metrics.upcomingBillTotal)}.`);
-    }
-    if (metrics.flow && metrics.forecast < Number(metrics.flow.safetyBalance || 0)) {
-      messages.push(`Your forecast balance is below your safety level.`);
+    if (activeAccounts().length) {
+      messages.push(`${activeAccounts().length} active account${activeAccounts().length === 1 ? '' : 's'} feed this view.`);
     }
   }
   text.textContent = messages.join(' ');
@@ -3240,6 +3444,21 @@ function renderPlanning() {
     const node = document.getElementById(id);
     if (node) node.textContent = value;
   };
+  const accountTotals = activeAccounts().reduce((totals, account) => {
+    const balance = trackedAccountBalance(account);
+    if (isLiabilityAccount(account)) totals.liabilities += balance;
+    else if (isInvestmentAccount(account)) totals.investments += balance;
+    else totals.assets += balance;
+    return totals;
+  }, { assets: 0, investments: 0, liabilities: 0 });
+  setText('accountAssetTotal', fmt(accountTotals.assets));
+  setText('accountInvestmentTotal', fmt(accountTotals.investments));
+  setText('accountLiabilityTotal', fmt(accountTotals.liabilities));
+  setText('accountNetPosition', fmt(
+    accountTotals.assets + accountTotals.investments - accountTotals.liabilities
+  ));
+  renderRecurringAutomation();
+  renderDashboardActionItems();
   setText('planBudgetUsed', metrics.budgetTotal > 0 ? `${(metrics.spent / metrics.budgetTotal * 100).toFixed(0)}%` : 'Not set');
   setText('planUpcomingBills', fmt(metrics.upcomingBillTotal));
   setText('planNetWorth', fmt(metrics.netWorth));
@@ -3267,17 +3486,29 @@ function renderPlanning() {
       const tracked = trackedAccountBalance(account);
       const statement = Number(account.statementBalance || 0);
       const difference = statement - tracked;
+      const liability = isLiabilityAccount(account);
+      const balanceLabel = liability ? 'FinTrack-calculated amount owed' : 'FinTrack-calculated balance';
+      const statementLabel = liability ? 'Current statement amount owed' : 'Current bank balance';
       return `<div class="planning-row">
         <div class="planning-row-main">
           <strong>${escHtml(account.name)}</strong>
-          <span>${escHtml(account.bank || 'Bank not specified')} · ${escHtml(account.purpose)}</span>
+          <span>${escHtml(accountTypeLabels[account.type] || 'Account')} · ${escHtml(account.bank || 'Institution not specified')} · ${escHtml(account.purpose)}</span>
         </div>
         <div class="account-balance-line">
-          <span>Tracked <strong>${fmt(tracked)}</strong></span>
-          <span>Bank balance <strong>${fmt(statement)}</strong></span>
-          <span class="${Math.abs(difference) < 0.01 ? 'gain-positive' : 'forecast-warning'}">Difference <strong>${fmt(difference)}</strong></span>
+          <div class="account-metric">
+            <span>${balanceLabel}</span>
+            <strong>${fmt(tracked)}</strong>
+          </div>
+          <div class="account-metric">
+            <span>${statementLabel}</span>
+            <strong>${fmt(statement)}</strong>
+          </div>
+          <div class="account-metric ${Math.abs(difference) < 0.01 ? 'gain-positive' : 'forecast-warning'}">
+            <span>Unexplained gap</span>
+            <strong>${fmt(Math.abs(difference))}</strong>
+          </div>
         </div>
-        <button class="action-btn balance-btn" data-account-balance="${account.id}" title="Update bank balance">✏️</button>
+        <button class="btn-secondary compact-btn" data-account-review="${account.id}" type="button">Review balance</button>
         <button class="planning-delete" data-account-id="${account.id}" title="Remove account">×</button>
       </div>`;
     }).join('') : '<p class="planning-empty">No accounts configured. Add labels such as Salary, Investment, and Spending.</p>';
@@ -3376,39 +3607,287 @@ function renderAccountLedger(accountId) {
     list.innerHTML = '<p class="planning-empty">Add an account to see its connected cash flow.</p>';
     return;
   }
-  const entries = accountLedgerEntries(account.id);
-  const credits = entries.filter(row => row.amount > 0).reduce((sum, row) => sum + row.amount, 0);
-  const debits = entries.filter(row => row.amount < 0).reduce((sum, row) => sum - row.amount, 0);
+  const period = document.getElementById('ledgerPeriodFilter')?.value || 'month';
+  const typeFilter = document.getElementById('ledgerTypeFilter')?.value || 'all';
+  const sortOrder = document.getElementById('ledgerSortOrder')?.value || 'desc';
+  const search = (document.getElementById('ledgerSearch')?.value || '').trim().toLowerCase();
+  const allEntries = accountLedgerEntries(account.id)
+    .sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
+  let runningBalance = Number(account.openingBalance || 0);
+  allEntries.forEach(row => {
+    runningBalance += Number(row.amount || 0);
+    row.balanceAfter = runningBalance;
+  });
+  const monthStart = `${currentYear}-${String(currentMonthIdx + 1).padStart(2, '0')}-01`;
+  const nextMonthIndex = (currentMonthIdx + 1) % 12;
+  const nextMonthYear = currentMonthIdx === 11 ? currentYear + 1 : currentYear;
+  const monthEnd = `${nextMonthYear}-${String(nextMonthIndex + 1).padStart(2, '0')}-01`;
+  const financialYearStartYear = currentMonthIdx >= 3 ? currentYear : currentYear - 1;
+  const fyStart = `${financialYearStartYear}-04-01`;
+  const fyEnd = `${financialYearStartYear + 1}-04-01`;
+  const entryGroup = row => {
+    const type = String(row.type || '').toLowerCase();
+    if (type.includes('income')) return 'income';
+    if (type.includes('expense')) return 'expense';
+    if (type.includes('transfer')) return 'transfer';
+    if (type.includes('adjustment')) return 'adjustment';
+    return 'investment';
+  };
+  const visibleEntries = allEntries.filter(row => {
+    const date = String(row.date || '');
+    if (period === 'month' && !(date >= monthStart && date < monthEnd)) return false;
+    if (period === 'fy' && !(date >= fyStart && date < fyEnd)) return false;
+    if (typeFilter !== 'all' && entryGroup(row) !== typeFilter) return false;
+    if (search && !`${row.type} ${row.description}`.toLowerCase().includes(search)) return false;
+    return true;
+  });
+  const credits = visibleEntries.filter(row => row.amount > 0)
+    .reduce((sum, row) => sum + row.amount, 0);
+  const debits = visibleEntries.filter(row => row.amount < 0)
+    .reduce((sum, row) => sum - row.amount, 0);
+  const netMovement = credits - debits;
   summary.innerHTML = `
-    <span>Opening <strong>${fmt(Number(account.openingBalance || 0))}</strong></span>
     <span>Money in <strong class="gain-positive">+${fmt(credits)}</strong></span>
     <span>Money out <strong class="gain-negative">-${fmt(debits)}</strong></span>
-    <span>Tracked balance <strong>${fmt(trackedAccountBalance(account))}</strong></span>`;
-  list.innerHTML = entries.length ? entries.slice(0, 100).map(row => `
-    <div class="planning-row simple">
-      <div><strong>${escHtml(row.type)}</strong>
-        <span>${fmtDate(row.date)} · ${escHtml(row.description)}</span></div>
-      <strong class="${row.amount >= 0 ? 'gain-positive' : 'gain-negative'}">${row.amount >= 0 ? '+' : '-'}${fmt(Math.abs(row.amount))}</strong>
-    </div>`).join('') : '<p class="planning-empty">No linked transactions for this account.</p>';
+    <span>Net movement <strong class="${netMovement >= 0 ? 'gain-positive' : 'gain-negative'}">${netMovement >= 0 ? '+' : '-'}${fmt(Math.abs(netMovement))}</strong></span>
+    <span>FinTrack balance <strong>${fmt(trackedAccountBalance(account))}</strong></span>`;
+  const ordered = sortOrder === 'asc' ? visibleEntries : [...visibleEntries].reverse();
+  list.innerHTML = ordered.length ? `
+    <div class="ledger-table-wrap">
+      <table class="data-table ledger-table">
+        <thead><tr>
+          <th>Date</th><th>Transaction</th><th>Details</th>
+          <th>Money In</th><th>Money Out</th><th>Balance</th>
+        </tr></thead>
+        <tbody>${ordered.map(row => `<tr>
+          <td>${fmtDate(row.date)}</td>
+          <td><span class="ledger-type ledger-type-${entryGroup(row)}">${escHtml(row.type)}</span></td>
+          <td>${escHtml(row.description)}</td>
+          <td class="ledger-money gain-positive">${row.amount > 0 ? fmt(row.amount) : '—'}</td>
+          <td class="ledger-money gain-negative">${row.amount < 0 ? fmt(-row.amount) : '—'}</td>
+          <td class="ledger-money">${fmt(row.balanceAfter)}</td>
+        </tr>`).join('')}</tbody>
+      </table>
+    </div>` : '<p class="planning-empty">No transactions match the selected filters.</p>';
+}
+
+let reconciliationAccountId = null;
+
+function reconciliationAccount() {
+  return accounts.find(row => Number(row.id) === Number(reconciliationAccountId));
+}
+
+function updateReconciliationPreview() {
+  const account = reconciliationAccount();
+  if (!account) return;
+  const calculated = trackedAccountBalance(account);
+  const actualInput = document.getElementById('reconcileStatementBalance');
+  const actual = actualInput ? Number(actualInput.value || 0) : Number(account.statementBalance || 0);
+  const gap = actual - calculated;
+  document.getElementById('reconcileCalculated').textContent = fmt(calculated);
+  document.getElementById('reconcileActual').textContent = fmt(actual);
+  document.getElementById('reconcileGap').textContent = Math.abs(gap) < 0.01
+    ? fmt(0)
+    : `${fmt(Math.abs(gap))} ${gap > 0 ? 'missing from FinTrack' : 'extra in FinTrack'}`;
+
+  const proposedDate = document.getElementById('reconcileOpeningDate')?.value;
+  const proposedOpening = numericValue('reconcileOpeningBalance');
+  const proposedAccount = { ...account, openingDate: proposedDate, openingBalance: proposedOpening };
+  const proposedBalance = trackedAccountBalance(proposedAccount);
+  const openingPreview = document.getElementById('openingPositionPreview');
+  if (openingPreview) {
+    openingPreview.textContent = `New FinTrack balance: ${fmt(proposedBalance)} · Remaining gap: ${fmt(Math.abs(actual - proposedBalance))}`;
+  }
+  const adjustment = numericValue('reconcileAdjustmentAmount');
+  const adjustmentPreview = document.getElementById('adjustmentPreview');
+  if (adjustmentPreview) {
+    adjustmentPreview.textContent = `New FinTrack balance: ${fmt(calculated + adjustment)} · Remaining gap: ${fmt(Math.abs(actual - calculated - adjustment))}`;
+  }
+}
+
+function openReconciliation(accountId) {
+  const account = accounts.find(row => Number(row.id) === Number(accountId));
+  if (!account) return;
+  reconciliationAccountId = account.id;
+  document.getElementById('reconcileAccountName').textContent = account.name;
+  document.getElementById('reconcileStatementBalance').value = Number(account.statementBalance || 0);
+  document.getElementById('reconcileOpeningDate').value = account.openingDate || todayISO();
+  document.getElementById('reconcileOpeningBalance').value = Number(account.openingBalance || 0);
+  document.getElementById('reconcileAdjustmentDate').value = todayISO();
+  document.getElementById('reconcileAdjustmentAmount').value =
+    (Number(account.statementBalance || 0) - trackedAccountBalance(account)).toFixed(2);
+  document.getElementById('reconcileAdjustmentReason').value = '';
+  updateReconciliationPreview();
+  openModal('reconciliationModal');
 }
 
 function initPlanningEvents() {
   document.getElementById('ledgerAccountSelect')?.addEventListener('change', event => {
     renderAccountLedger(event.target.value);
   });
+  ['ledgerPeriodFilter', 'ledgerTypeFilter', 'ledgerSortOrder'].forEach(id => {
+    document.getElementById(id)?.addEventListener('change', () => {
+      renderAccountLedger(document.getElementById('ledgerAccountSelect')?.value);
+    });
+  });
+  document.getElementById('ledgerSearch')?.addEventListener('input', () => {
+    renderAccountLedger(document.getElementById('ledgerAccountSelect')?.value);
+  });
+  ['reconcileStatementBalance', 'reconcileOpeningDate', 'reconcileOpeningBalance',
+    'reconcileAdjustmentAmount'].forEach(id => {
+    document.getElementById(id)?.addEventListener('input', updateReconciliationPreview);
+  });
+  document.getElementById('statementBalanceForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const account = reconciliationAccount();
+    if (!account) return;
+    account.statementBalance = numericValue('reconcileStatementBalance');
+    await saveAccounts();
+    renderPlanning();
+    document.getElementById('reconcileAdjustmentAmount').value =
+      (Number(account.statementBalance || 0) - trackedAccountBalance(account)).toFixed(2);
+    updateReconciliationPreview();
+    showPriceToast('Current bank/card balance updated');
+  });
+  document.getElementById('openingPositionForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const account = reconciliationAccount();
+    const openingDate = document.getElementById('reconcileOpeningDate').value;
+    if (!account || !openingDate) return;
+    account.openingDate = openingDate;
+    account.openingBalance = numericValue('reconcileOpeningBalance');
+    await saveAccounts();
+    renderPlanning();
+    document.getElementById('reconcileAdjustmentAmount').value =
+      (Number(account.statementBalance || 0) - trackedAccountBalance(account)).toFixed(2);
+    updateReconciliationPreview();
+    showPriceToast('Tracking start position saved');
+  });
+  document.getElementById('reconciliationAdjustmentForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const account = reconciliationAccount();
+    const date = document.getElementById('reconcileAdjustmentDate').value;
+    const amount = numericValue('reconcileAdjustmentAmount');
+    const reason = document.getElementById('reconcileAdjustmentReason').value.trim();
+    if (!account || !date || !reason || amount === 0) return;
+    reconciliationAdjustments.push({
+      id: Date.now(),
+      accountId: Number(account.id),
+      date,
+      amount,
+      reason,
+      createdAt: new Date().toISOString(),
+    });
+    await saveReconciliationAdjustments();
+    event.target.reset();
+    document.getElementById('reconcileAdjustmentDate').value = todayISO();
+    renderPlanning();
+    updateReconciliationPreview();
+    showPriceToast('Reconciliation adjustment added');
+  });
+  document.getElementById('checkRecurringBtn')?.addEventListener('click', async () => {
+    await generateRecurringOccurrences();
+  });
+  document.getElementById('recurringRuleForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    recurringRules.push({
+      id: Math.max(0, ...recurringRules.map(row => Number(row.id || 0))) + 1,
+      name: document.getElementById('recurringName').value.trim(),
+      type: 'sip',
+      frequency: document.getElementById('recurringFrequency').value,
+      day: numericValue('recurringDay'),
+      amount: numericValue('recurringAmount'),
+      fromAccountId: Number(document.getElementById('recurringFromAccount').value),
+      investmentId: Number(document.getElementById('recurringInvestment').value),
+      startDate: document.getElementById('recurringStartDate').value,
+      endDate: '',
+      active: true,
+    });
+    await saveRecurringRules();
+    event.target.reset();
+    document.getElementById('recurringStartDate').value = todayISO();
+    await generateRecurringOccurrences();
+    renderPlanning();
+  });
+  document.getElementById('recurringAutomationCard')?.addEventListener('click', async event => {
+    const toggleId = Number(event.target.dataset.recurringToggle);
+    if (toggleId) {
+      const rule = recurringRules.find(row => Number(row.id) === toggleId);
+      if (!rule) return;
+      rule.active = !(rule.active !== false && String(rule.active).toLowerCase() !== 'false');
+      await saveRecurringRules();
+      if (rule.active) await generateRecurringOccurrences();
+      renderPlanning();
+      return;
+    }
+    const skipId = event.target.dataset.recurringSkip;
+    if (skipId) {
+      await apiPost(`/recurring-occurrences/${encodeURIComponent(skipId)}/action`, { action: 'skip' });
+      recurringOccurrences = await apiGet('/recurring-occurrences');
+      renderPlanning();
+      return;
+    }
+    const confirmId = event.target.dataset.recurringConfirm;
+    if (!confirmId) return;
+    const occurrence = recurringOccurrences.find(row => String(row.id) === confirmId);
+    const rule = recurringRules.find(row => Number(row.id) === Number(occurrence?.ruleId));
+    const inv = investments.find(row => Number(row.id) === Number(rule?.investmentId));
+    if (!occurrence || !rule || !inv) return;
+    const actualDate = prompt('Actual transaction date:', occurrence.scheduledDate);
+    if (!actualDate) return;
+    const amount = Number(prompt('Actual invested amount:', rule.amount));
+    if (!Number.isFinite(amount) || amount <= 0) return;
+    const isBalanceHolding = ['ppf', 'fixed_deposit'].includes(inv.category);
+    const price = isBalanceHolding
+      ? amount
+      : Number(prompt('Actual NAV / purchase price:', inv.currentPrice || inv.buyPrice || 0));
+    if (!Number.isFinite(price) || price <= 0) return;
+    const units = isBalanceHolding
+      ? 1
+      : Number(prompt('Units allotted:', (amount / price).toFixed(6)));
+    if (!Number.isFinite(units) || units <= 0) return;
+    await apiPost(`/recurring-occurrences/${encodeURIComponent(confirmId)}/action`, {
+      action: 'confirm', actualDate, actualAmount: amount, price, units,
+    });
+    [investments, recurringOccurrences] = await Promise.all([
+      apiGet('/investments'), apiGet('/recurring-occurrences'),
+    ]);
+    renderAfterInvestmentChange();
+  });
   document.getElementById('accountForm')?.addEventListener('submit', async event => {
     event.preventDefault();
-    accounts.push({
+    const accountType = document.getElementById('accountType').value;
+    const classification = ['credit_card', 'loan'].includes(accountType)
+      ? 'liability'
+      : ['demat', 'mutual_fund', 'gold', 'ppf', 'nps', 'fixed_deposit'].includes(accountType)
+        ? 'investment'
+        : 'asset';
+    const newAccount = {
       id: Math.max(0, ...accounts.map(row => Number(row.id || 0))) + 1,
       name: document.getElementById('accountName').value.trim(),
       bank: document.getElementById('accountBank').value.trim(),
+      type: accountType,
+      classification,
       purpose: document.getElementById('accountPurpose').value,
+      currency: 'INR',
+      openingDate: document.getElementById('accountOpeningDate').value,
       openingBalance: numericValue('accountOpeningBalance'),
       statementBalance: numericValue('accountStatementBalance'),
+      creditLimit: numericValue('accountCreditLimit'),
       includeNetWorth: true,
       active: true,
+    };
+    accounts.push(newAccount);
+    const compatibleCategories = investmentCategoriesForAccountType(accountType);
+    let linkedExistingHoldings = false;
+    investments.forEach(inv => {
+      if (!inv.containerAccountId && compatibleCategories.includes(inv.category)) {
+        inv.containerAccountId = newAccount.id;
+        linkedExistingHoldings = true;
+      }
     });
     await saveAccounts();
+    if (linkedExistingHoldings) await saveInvestments();
     event.target.reset();
     renderPlanning();
   });
@@ -3420,6 +3899,12 @@ function initPlanningEvents() {
     const amount = numericValue('transferAmount');
     if (!fromAccountId || !toAccountId || fromAccountId === toAccountId || amount <= 0) {
       alert('Choose two different accounts and enter a positive amount.');
+      return;
+    }
+    const sourceAccount = accounts.find(row => Number(row.id) === fromAccountId);
+    if (sourceAccount && !isLiabilityAccount(sourceAccount)
+        && trackedAccountBalance(sourceAccount) < amount) {
+      alert(`${sourceAccount.name} does not have enough tracked balance for this transfer.`);
       return;
     }
     transfers.push({
@@ -3529,17 +4014,9 @@ function initPlanningEvents() {
   });
 
   document.getElementById('accountList')?.addEventListener('click', async event => {
-    const balanceId = Number(event.target.dataset.accountBalance);
-    if (balanceId) {
-      const account = accounts.find(row => Number(row.id) === balanceId);
-      if (!account) return;
-      const input = prompt(`Latest bank balance for ${account.name}:`, account.statementBalance || 0);
-      if (input === null) return;
-      const value = Number(input);
-      if (!Number.isFinite(value)) return;
-      account.statementBalance = value;
-      await saveAccounts();
-      renderPlanning();
+    const reviewId = Number(event.target.dataset.accountReview);
+    if (reviewId) {
+      openReconciliation(reviewId);
       return;
     }
     const id = Number(event.target.dataset.accountId);
@@ -3547,7 +4024,10 @@ function initPlanningEvents() {
     const referenced = expenses.some(row => Number(row.accountId) === id)
       || savingsHistory.some(row => Number(row.accountId) === id)
       || transfers.some(row => Number(row.fromAccountId) === id || Number(row.toAccountId) === id)
-      || investments.some(inv => (inv.transactions || []).some(tx => Number(tx.accountId) === id));
+      || investments.some(inv => Number(inv.containerAccountId) === id
+        || (inv.transactions || []).some(tx => Number(tx.accountId) === id))
+      || reconciliationAdjustments.some(row => Number(row.accountId) === id)
+      || recurringRules.some(row => Number(row.fromAccountId) === id);
     if (referenced) {
       alert('This account is used by existing records. Reassign them before removing it.');
       return;
@@ -3678,6 +4158,7 @@ document.getElementById('investmentForm')?.addEventListener('submit', e => {
     buyPrice:     parseFloat(form.buyPrice.value),
     currentPrice: parseFloat(form.currentPrice.value),
     date:         form.date.value,
+    containerAccountId: Number(document.getElementById('invContainerAccount').value) || null,
   };
   if (marketCategories.includes(cat)) {
     inv.marketCap = form.querySelector('#invMarketCap')?.value || 'large';
@@ -3751,7 +4232,6 @@ document.getElementById('emergencyFundForm')?.addEventListener('submit', e => {
   renderEmergencyFund();
   renderDashboardCards();
   renderPlanning();
-  initPlanningEvents();
   initCharts();
   closeModal('emergencyFundModal');
 });
@@ -4064,6 +4544,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Load data from the local server
   await loadAllData();
+  if (serverAvailable) {
+    await generateRecurringOccurrences();
+  }
 
   // Show server status badge
   const badge = document.getElementById('serverBadge');
@@ -4100,15 +4583,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   renderInvestmentsTable();
   renderSavingsCards();
   renderSavingsTable();
-  renderGoals();
-  renderEmergencyFund();
+  renderPlanning();
+  initPlanningEvents();
   renderDashboardCards();
 
   // Charts
   initCharts();
-
-  // Documents browser
-  initDocumentEvents();
 
   // Month display
   updateMonthDisplay();
