@@ -100,8 +100,27 @@
     <!-- =================== DASHBOARD SECTION =================== -->
     <section class="content-section active" id="section-dashboard">
 
+      <div class="dashboard-toolbar">
+        <div>
+          <label for="dashboardPeriod">Reporting period</label>
+          <select id="dashboardPeriod">
+            <option value="fytd" selected>Financial year to date</option>
+            <option value="month">Selected month</option>
+            <option value="year">Calendar year</option>
+            <option value="all">All time</option>
+            <option value="custom">Custom range</option>
+          </select>
+        </div>
+        <div class="dashboard-custom-dates" id="dashboardCustomDates" hidden>
+          <label>From <input type="date" id="dashboardDateFrom" /></label>
+          <label>To <input type="date" id="dashboardDateTo" /></label>
+        </div>
+        <span class="dashboard-period-label" id="dashboardPeriodLabel"></span>
+        <button class="btn-primary" id="btnAddIncome" type="button">+ Add Income</button>
+      </div>
+
       <!-- Summary Cards -->
-      <div class="cards-grid">
+      <div class="cards-grid dashboard-kpis">
         <div class="summary-card wealth">
           <div class="card-icon">💼</div>
           <div class="card-content">
@@ -113,7 +132,7 @@
         <div class="summary-card income">
           <div class="card-icon">💵</div>
           <div class="card-content">
-            <span class="card-label">Monthly Income</span>
+            <span class="card-label">Income Received</span>
             <span class="card-value" id="dashIncome">₹0</span>
             <span class="card-change" id="dashIncomeChange"></span>
           </div>
@@ -121,15 +140,23 @@
         <div class="summary-card expenses">
           <div class="card-icon">💸</div>
           <div class="card-content">
-            <span class="card-label">Monthly Expenses</span>
+            <span class="card-label">Expenses</span>
             <span class="card-value" id="dashExpenses">₹0</span>
             <span class="card-change" id="dashExpensesChange"></span>
+          </div>
+        </div>
+        <div class="summary-card invest-total">
+          <div class="card-icon">&#128200;</div>
+          <div class="card-content">
+            <span class="card-label">Invested</span>
+            <span class="card-value" id="dashInvested">&#8377;0</span>
+            <span class="card-change" id="dashInvestedChange"></span>
           </div>
         </div>
         <div class="summary-card savings">
           <div class="card-icon">🏦</div>
           <div class="card-content">
-            <span class="card-label">Net Savings</span>
+            <span class="card-label">Available Surplus</span>
             <span class="card-value" id="dashSavings">₹0</span>
             <span class="card-change" id="dashSavingsChange"></span>
           </div>
@@ -147,17 +174,17 @@
       <div class="financial-summary" id="financialSummary">
         <div class="financial-summary-icon">🧭</div>
         <div>
-          <strong>Your monthly financial direction</strong>
+          <strong>Your financial direction</strong>
           <p id="financialSummaryText">Add accounts and link transactions to see how money moves.</p>
         </div>
       </div>
 
-      <!-- Charts Row -->
+      <!-- Period charts -->
       <div class="charts-row">
         <div class="chart-card">
           <div class="chart-header">
-            <h3>Income Breakdown</h3>
-            <span class="chart-subtitle" id="expenseChartSubtitle">This Month</span>
+            <h3>Money Allocation</h3>
+            <span class="chart-subtitle" id="expenseChartSubtitle">Selected period</span>
           </div>
           <div class="chart-container">
             <canvas id="expenseChart"></canvas>
@@ -166,25 +193,42 @@
         </div>
         <div class="chart-card">
           <div class="chart-header">
-            <h3>Savings Rate Trend</h3>
-            <span class="chart-subtitle">% of income saved — last 12 months</span>
+            <h3>Income Sources</h3>
+            <span class="chart-subtitle">Income actually credited</span>
           </div>
           <div class="chart-container">
+            <canvas id="incomeSourceChart"></canvas>
+          </div>
+          <div class="chart-legend" id="incomeSourceLegend"></div>
+        </div>
+      </div>
+
+      <div class="charts-row">
+        <div class="chart-card wide">
+          <div class="chart-header">
+            <h3>Monthly Money Flow</h3>
+            <span class="chart-subtitle">Income, expenses, investments and surplus — last 12 months</span>
+          </div>
+          <div class="chart-container tall">
             <canvas id="savingsChart"></canvas>
           </div>
         </div>
       </div>
 
-      <!-- Net-Worth History Chart -->
       <div class="charts-row">
-        <div class="chart-card wide">
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>Expense Categories</h3>
+            <span class="chart-subtitle">Where your spending went</span>
+          </div>
+          <div class="chart-container tall"><canvas id="dashboardExpenseCategoryChart"></canvas></div>
+        </div>
+        <div class="chart-card">
           <div class="chart-header">
             <h3>Net-Worth History</h3>
-            <span class="chart-subtitle">Assets minus liabilities from saved monthly snapshots</span>
+            <span class="chart-subtitle" id="wealthChartSubtitle">Automatically captured monthly · manual snapshots override</span>
           </div>
-          <div class="chart-container tall">
-            <canvas id="wealthChart"></canvas>
-          </div>
+          <div class="chart-container tall"><canvas id="wealthChart"></canvas></div>
         </div>
       </div>
 
@@ -192,7 +236,7 @@
       <div class="bottom-row">
         <div class="table-card">
           <div class="table-header">
-            <h3>Recent Transactions</h3>
+            <h3>Recent Income &amp; Expenses</h3>
             <a href="#" class="view-all" data-section="expenses">View All</a>
           </div>
           <div id="recentTransactions"></div>
@@ -296,10 +340,13 @@
       <div class="section-toolbar">
         <div class="category-tabs" id="categoryTabs">
           <button class="cat-tab active" data-category="all">All</button>
-          <button class="cat-tab" data-category="food">🍔 Food</button>
+          <button class="cat-tab" data-category="food">🍔 Food &amp; Takeaway</button>
+          <button class="cat-tab" data-category="grocery">🛒 Grocery</button>
           <button class="cat-tab" data-category="travel">✈️ Travel</button>
           <button class="cat-tab" data-category="housing">🏠 Housing</button>
           <button class="cat-tab" data-category="health">⚕️ Health</button>
+          <button class="cat-tab" data-category="personal_care">💇 Personal Care</button>
+          <button class="cat-tab" data-category="subscriptions">💻 Subscriptions &amp; Software</button>
           <button class="cat-tab" data-category="entertainment">🎬 Entertainment</button>
           <button class="cat-tab" data-category="utilities">⚡ Utilities</button>
           <button class="cat-tab" data-category="shopping">🛍️ Shopping</button>
@@ -536,6 +583,22 @@
         <div id="emergencyFundCard" class="emergency-fund-card"></div>
       </div>
 
+      <div class="table-card full-width">
+        <div class="table-header">
+          <div>
+            <h3>Income Transactions</h3>
+            <span class="chart-subtitle">Each credit updates its receiving account and all reports</span>
+          </div>
+          <button class="btn-primary btn-sm" id="btnAddIncomeFromSavings" type="button">+ Add Income</button>
+        </div>
+        <div class="expense-table-scroll">
+          <table class="data-table">
+            <thead><tr><th>Date</th><th>Source</th><th>Description</th><th>Account</th><th>Amount</th><th></th></tr></thead>
+            <tbody id="incomeTransactionsBody"></tbody>
+          </table>
+        </div>
+      </div>
+
       <!-- Monthly Savings Log -->
       <div class="table-card full-width">
         <div class="table-header">
@@ -569,6 +632,35 @@
         <div class="plan-kpi"><span>Net Position</span><strong id="accountNetPosition">0</strong></div>
       </div>
 
+      <div class="table-card full-width emergency-reserve-card" id="emergencyReserveCard">
+        <div class="table-header emergency-reserve-header">
+          <div>
+            <h3>Emergency Reserve</h3>
+            <span class="chart-subtitle">Existing assets designated for emergencies—never counted twice</span>
+          </div>
+          <button class="btn-primary btn-sm" id="addEmergencyAllocationBtn" type="button">+ Allocate Asset</button>
+        </div>
+        <div class="emergency-reserve-summary">
+          <div class="reserve-stat reserve-stat-primary"><span>Usable Reserve</span><strong id="emergencyReserveUsable">&#8377;0</strong></div>
+          <div class="reserve-stat"><span>Target</span><strong id="emergencyReserveTarget">&#8377;0</strong></div>
+          <div class="reserve-stat"><span>Target Gap</span><strong id="emergencyReserveGap">&#8377;0</strong></div>
+          <div class="reserve-stat"><span>Available Now</span><strong id="emergencyReserveImmediate">&#8377;0</strong></div>
+          <div class="reserve-stat"><span>Needs Redemption</span><strong id="emergencyReserveRedeemable">&#8377;0</strong></div>
+          <div class="reserve-stat"><span>Locked / Excluded</span><strong id="emergencyReserveLocked">&#8377;0</strong></div>
+        </div>
+        <div class="reserve-progress-row">
+          <div class="progress-bar"><div class="progress-fill" id="emergencyReserveProgress"></div></div>
+          <span id="emergencyReserveProgressText">Set a target to measure progress</span>
+        </div>
+        <form id="emergencyTargetForm" class="compact-form emergency-target-form">
+          <label for="emergencyTargetInput">Emergency-fund target</label>
+          <input id="emergencyTargetInput" type="number" min="0" step="100" placeholder="Target amount" required />
+          <button class="btn-secondary compact-btn" type="submit">Save Target</button>
+        </form>
+        <p class="planning-help">Usable reserve includes assets marked Available Now or Needs Redemption. Locked assets are shown for transparency but do not fund the target.</p>
+        <div id="emergencyAllocationList" class="emergency-allocation-list"></div>
+      </div>
+
       <div class="planning-grid">
         <div class="table-card" id="accountsCard">
           <div class="table-header"><h3>Accounts</h3></div>
@@ -598,6 +690,9 @@
               <option value="savings">Savings</option>
               <option value="other">Other</option>
             </select>
+            <select id="accountSettlementAccount" aria-label="Linked settlement bank" hidden>
+              <option value="">Linked settlement bank (optional)</option>
+            </select>
             <input id="accountOpeningDate" type="date" title="Tracking start date" aria-label="Tracking start date" required />
             <input id="accountOpeningBalance" type="number" step="0.01" placeholder="Balance at tracking start" aria-label="Balance at tracking start" />
             <input id="accountStatementBalance" type="number" step="0.01" placeholder="Current bank/card balance" aria-label="Current bank or card balance" />
@@ -605,11 +700,19 @@
             <button class="btn-primary" type="submit">Add Account</button>
           </form>
           <p class="planning-help">Start with the real balance already in the account on your tracking start date. Use labels or masked identifiers only—never account credentials.</p>
+          <p id="accountSaveStatus" class="account-save-status" role="status" aria-live="polite"></p>
           <div id="accountList" class="planning-list"></div>
         </div>
 
         <div class="table-card" id="transfersCard">
-          <div class="table-header"><h3>Recent Internal Transfers</h3></div>
+          <div class="table-header">
+            <h3>Recent Internal Transfers</h3>
+            <select id="transferPeriodFilter" class="compact-filter" aria-label="Internal transfer period">
+              <option value="month">Selected month</option>
+              <option value="year">Calendar year</option>
+              <option value="fy" selected>Financial year</option>
+            </select>
+          </div>
           <form id="transferForm" class="compact-form">
             <input id="transferDate" type="date" required />
             <select id="transferFrom" required><option value="">From account</option></select>
@@ -618,7 +721,7 @@
             <input id="transferNote" type="text" maxlength="120" placeholder="Purpose (optional)" />
             <button class="btn-primary" type="submit">Record Transfer</button>
           </form>
-          <p class="planning-help">Transfers move money between your accounts; they are not income or expenses. Showing the latest 10.</p>
+          <p class="planning-help" id="transferFilterStatus">Transfers move money between your accounts; they are not income or expenses.</p>
           <div id="transferList" class="planning-list"></div>
         </div>
 
@@ -641,6 +744,7 @@
               <option value="expense">Expenses</option>
               <option value="transfer">Transfers</option>
               <option value="investment">Investments</option>
+              <option value="opening">Opening positions</option>
               <option value="adjustment">Adjustments</option>
             </select>
             <select id="ledgerSortOrder" aria-label="Sort transactions">
@@ -689,7 +793,7 @@
               <option value="food">Food</option><option value="grocery">Grocery</option>
               <option value="travel">Travel</option><option value="housing">Housing</option>
               <option value="health">Health</option><option value="entertainment">Entertainment</option>
-              <option value="utilities">Utilities</option><option value="shopping">Shopping</option>
+              <option value="personal_care">Personal Care</option><option value="subscriptions">Subscriptions &amp; Software</option><option value="utilities">Utilities</option><option value="shopping">Shopping</option>
               <option value="other">Other</option>
             </select>
             <input id="budgetAmount" type="number" min="1" step="1" placeholder="Monthly limit" required />
@@ -704,7 +808,7 @@
             <input id="billName" type="text" maxlength="80" placeholder="Bill name" required />
             <input id="billAmount" type="number" min="0.01" step="0.01" placeholder="Amount" required />
             <input id="billDueDay" type="number" min="1" max="31" placeholder="Due day" required />
-            <select id="billCategory"><option value="utilities">Utilities</option><option value="housing">Housing</option><option value="health">Health</option><option value="entertainment">Entertainment</option><option value="other">Other</option></select>
+            <select id="billCategory"><option value="utilities">Utilities</option><option value="housing">Housing</option><option value="health">Health</option><option value="personal_care">Personal Care</option><option value="subscriptions">Subscriptions &amp; Software</option><option value="entertainment">Entertainment</option><option value="other">Other</option></select>
             <label class="checkbox-label"><input id="billIncludedInBudget" type="checkbox" checked /> Included in category budget</label>
             <button class="btn-primary" type="submit">Add Bill</button>
           </form>
@@ -712,7 +816,8 @@
         </div>
 
         <div class="table-card">
-          <div class="table-header"><h3>Monthly Net-Worth Snapshot</h3></div>
+          <div class="table-header"><h3>Net-Worth Snapshots</h3></div>
+          <p class="planning-form-help">FinTrack captures the current month automatically. Use this form only to add older history or override a month.</p>
           <form id="netWorthForm" class="compact-form planning-form-grid">
             <input id="nwCash" type="number" min="0" step="1" placeholder="Cash" />
             <input id="nwBank" type="number" min="0" step="1" placeholder="Bank balances" />
@@ -722,7 +827,7 @@
             <input id="nwLoans" type="number" min="0" step="1" placeholder="Loans" />
             <input id="nwCards" type="number" min="0" step="1" placeholder="Credit cards" />
             <input id="nwOtherLiabilities" type="number" min="0" step="1" placeholder="Other liabilities" />
-            <button class="btn-primary" type="submit">Save Snapshot</button>
+            <button class="btn-primary" type="submit">Save Manual Snapshot</button>
           </form>
           <div id="netWorthHistory" class="planning-list"></div>
         </div>
@@ -779,6 +884,58 @@
 
   <!-- ===================== MODALS ===================== -->
 
+  <div class="modal-overlay" id="incomeModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>Add Income</h2>
+        <button class="modal-close" data-modal="incomeModal">&#x2715;</button>
+      </div>
+      <div class="modal-body">
+        <form id="incomeForm" autocomplete="off">
+          <div class="form-row">
+            <div class="form-group">
+              <label>Date credited</label>
+              <input type="date" id="incomeDate" name="date" required />
+            </div>
+            <div class="form-group">
+              <label>Amount (&#8377;)</label>
+              <input type="number" id="incomeAmount" name="amount" min="0.01" step="0.01" required />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Income source</label>
+              <select id="incomeSource" name="source" required>
+                <option value="salary">Salary</option>
+                <option value="bonus">Bonus</option>
+                <option value="freelance">Freelance</option>
+                <option value="business">Business</option>
+                <option value="interest">Interest</option>
+                <option value="dividend">Dividend</option>
+                <option value="rent">Rent received</option>
+                <option value="gift">Gift</option>
+                <option value="other">Other income</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Credited to account</label>
+              <select id="incomeAccount" name="accountId" required><option value="">Select account</option></select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Description</label>
+            <input type="text" id="incomeDescription" name="description" maxlength="160" placeholder="e.g. July salary" required />
+          </div>
+          <p class="form-help">This credits the selected account on the actual received date.</p>
+          <div class="form-actions">
+            <button type="button" class="btn-secondary" data-modal="incomeModal">Cancel</button>
+            <button type="submit" class="btn-primary">Add Income</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
   <!-- Add Expense Modal -->
   <div class="modal-overlay" id="expenseModal">
     <div class="modal">
@@ -807,11 +964,13 @@
               <label>Category</label>
               <select id="expCategory" name="category" required>
                 <option value="">Select category</option>
-                <option value="food">🍔 Food</option>
+                <option value="food">🍔 Food &amp; Takeaway</option>
                 <option value="grocery">🛒 Grocery</option>
                 <option value="travel">✈️ Travel</option>
                 <option value="housing">🏠 Housing</option>
                 <option value="health">⚕️ Health</option>
+                <option value="personal_care">💇 Personal Care</option>
+                <option value="subscriptions">💻 Subscriptions &amp; Software</option>
                 <option value="entertainment">🎬 Entertainment</option>
                 <option value="utilities">⚡ Utilities</option>
                 <option value="shopping">🛍️ Shopping</option>
@@ -836,6 +995,33 @@
           <div class="form-actions">
             <button type="button" class="btn-secondary" data-modal="expenseModal">Cancel</button>
             <button type="submit" class="btn-primary">Add Expense</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Destructive expense cleanup confirmation -->
+  <div class="modal-overlay" id="clearExpensesModal">
+    <div class="modal destructive-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="clearExpensesTitle">
+      <div class="modal-header">
+        <h2 id="clearExpensesTitle">Delete all expenses?</h2>
+        <button class="modal-close" data-modal="clearExpensesModal" aria-label="Cancel and close">&#x2715;</button>
+      </div>
+      <div class="modal-body">
+        <div class="destructive-warning">
+          <strong>This permanently deletes every recorded expense.</strong>
+          <p><span id="clearExpensesCount">0 expenses</span>, totaling <strong id="clearExpensesTotal">&#8377;0</strong>, will be removed across all dates and accounts.</p>
+          <p>Account balances, expense reports, savings figures, and net-worth history may change.</p>
+        </div>
+        <form id="clearExpensesForm" autocomplete="off">
+          <div class="form-group">
+            <label for="clearExpensesConfirmation">Type <strong>DELETE</strong> to confirm</label>
+            <input id="clearExpensesConfirmation" type="text" spellcheck="false" required />
+          </div>
+          <div class="form-actions">
+            <button type="button" class="btn-secondary" data-modal="clearExpensesModal">Cancel</button>
+            <button type="submit" class="btn-danger" id="confirmClearExpensesBtn" disabled>Delete All Expenses</button>
           </div>
         </form>
       </div>
@@ -868,6 +1054,18 @@
 
           <!-- STEP 2: Fields revealed after type is selected -->
           <div id="invDynamicFields" style="display:none;">
+            <fieldset class="investment-entry-mode">
+              <legend>How should this investment enter FinTrack?</legend>
+              <label>
+                <input type="radio" name="entryMode" value="connected" checked />
+                <span><strong>New account-funded investment</strong><small>Deduct the purchase or deposit from a funding account.</small></span>
+              </label>
+              <label>
+                <input type="radio" name="entryMode" value="prior" />
+                <span><strong>Prior investment / opening position</strong><small>Set the position without changing any bank-account balance.</small></span>
+              </label>
+            </fieldset>
+            <p class="investment-entry-help" id="invEntryModeHelp">This purchase will be connected to the selected funding account.</p>
             <div class="form-row">
               <div class="form-group" id="invAssetGroup">
                 <label id="invAssetLabel">Asset Ticker / Code</label>
@@ -878,29 +1076,17 @@
                 <input type="text" id="invName" name="assetName" placeholder="Company or fund name" maxlength="120" />
               </div>
             </div>
-            <!-- MF scheme code (shown only for mutual_funds) -->
+            <!-- Offline-first mutual-fund scheme search -->
             <div class="form-row" id="invSchemeGroup" style="display:none;">
-              <div class="form-group">
-                <label>MF Scheme Code <small class="hint">(from mfapi.in)</small></label>
-                <input type="text" id="invSchemeCode" name="schemeCode" placeholder="119551" maxlength="10" />
-              </div>
-            </div>
-            <div class="form-row inv-market-fields" id="invMarketFields" style="display:none;">
-              <div class="form-group">
-                <label>Market Cap</label>
-                <select id="invMarketCap" name="marketCap">
-                  <option value="large">Large Cap</option>
-                  <option value="mid">Mid Cap</option>
-                  <option value="small">Small Cap</option>
-                </select>
-              </div>
-              <div class="form-group">
-                <label>Risk Level</label>
-                <select id="invRiskLevel" name="riskLevel">
-                  <option value="low">Low</option>
-                  <option value="moderate" selected>Moderate</option>
-                  <option value="high">High</option>
-                </select>
+              <div class="form-group mf-scheme-picker">
+                <label>Find Mutual Fund Scheme</label>
+                <div class="mf-search-row">
+                  <input type="search" id="invMfSearch" placeholder="Type fund name, AMC, Direct, Growth…" maxlength="120" autocomplete="off" aria-controls="invMfSearchResults" />
+                  <button type="button" class="btn-secondary compact-btn" id="refreshMfCatalogBtn">Refresh catalogue</button>
+                </div>
+                <input type="hidden" id="invSchemeCode" name="schemeCode" />
+                <div class="mf-search-status" id="invMfSearchStatus">Search works offline after the catalogue has been downloaded once.</div>
+                <div class="mf-search-results" id="invMfSearchResults" role="listbox"></div>
               </div>
             </div>
             <div class="form-row">
@@ -910,24 +1096,25 @@
               </div>
               <div class="form-group">
                 <label id="invBuyPriceLabel">Buy Price (₹ per unit)</label>
-                <input type="number" id="invBuyPrice" name="buyPrice" placeholder="0.00" min="0.01" step="0.01" required />
+                <input type="number" id="invBuyPrice" name="buyPrice" placeholder="0.0000" min="0.0001" step="0.0001" required />
               </div>
             </div>
             <div class="form-row">
-              <div class="form-group">
+              <div class="form-group" id="invCurrPriceGroup">
                 <label id="invCurrPriceLabel">Current Price (₹ per unit)</label>
-                <input type="number" id="invCurrPrice" name="currentPrice" placeholder="0.00" min="0.01" step="0.01" required />
+                <input type="number" id="invCurrPrice" name="currentPrice" placeholder="0.0000" min="0.0001" step="0.0001" required />
               </div>
               <div class="form-group">
-                <label>Purchase Date</label>
+                <label id="invDateLabel">Purchase Date</label>
                 <input type="date" id="invDate" name="date" required />
               </div>
             </div>
-            <div class="form-group">
+            <div class="form-group" id="invContainerAccountGroup">
               <label>Investment Account</label>
               <select id="invContainerAccount" required><option value="">Select MF, Demat, PPF, NPS or FD account</option></select>
+              <small class="field-help" id="invContainerHelp">The holding's current value will be shown in this investment account.</small>
             </div>
-            <div class="form-group">
+            <div class="form-group" id="invFundingAccountGroup">
               <label>Paid From Account</label>
               <select id="invAccount" required><option value="">Select funding account</option></select>
             </div>
@@ -956,22 +1143,75 @@
         </div>
         <form id="tradeForm" autocomplete="off">
           <div class="form-row">
-            <div class="form-group">
-              <label>Units</label>
-              <input type="number" id="tradeUnits" name="units" placeholder="0" min="0.001" step="0.001" required />
+            <div class="form-group" id="tradeSellModeGroup" hidden>
+              <label>Redeem By</label>
+              <select id="tradeSellMode">
+                <option value="units">Units</option>
+                <option value="amount">Amount</option>
+              </select>
+            </div>
+            <div class="form-group" id="tradeUnitsGroup">
+              <label id="tradeUnitsLabel">Units</label>
+              <input type="number" id="tradeUnits" name="units" placeholder="0" min="0.000001" step="0.000001" required />
+            </div>
+            <div class="form-group" id="tradeAmountGroup" hidden>
+              <label>Redemption Amount (₹)</label>
+              <input type="number" id="tradeAmount" placeholder="0.00" min="0.01" step="0.01" />
             </div>
             <div class="form-group">
-              <label>Price per Unit (₹)</label>
-              <input type="number" id="tradePrice" name="price" placeholder="0.00" min="0.01" step="0.01" required />
+              <label id="tradePriceLabel">Price per Unit (₹)</label>
+              <input type="number" id="tradePrice" name="price" placeholder="0.0000" min="0.0001" step="0.0001" required />
             </div>
           </div>
-          <div class="form-group">
-            <label>Funding / Receiving Account</label>
+          <div class="form-row">
+            <div class="form-group">
+              <label id="tradeDateLabel">Transaction Date</label>
+              <input type="date" id="tradeDate" required />
+            </div>
+            <div class="form-group" id="tradeSettlementDateGroup" hidden>
+              <label id="tradeSettlementDateLabel">Credit / Settlement Date</label>
+              <input type="date" id="tradeSettlementDate" />
+            </div>
+          </div>
+          <div class="form-group" id="tradeChargesGroup" hidden>
+            <label>Charges / Exit Load / Taxes (₹)</label>
+            <input type="number" id="tradeCharges" min="0" step="0.01" value="0" />
+          </div>
+          <div class="form-group" id="tradeAccountGroup">
+            <label>Funding Account</label>
             <select id="tradeAccount" required><option value="">Select settlement account</option></select>
           </div>
+          <div class="trade-settlement-box" id="tradeSettlementDestination" hidden></div>
+          <div class="trade-proceeds-preview" id="tradeProceedsPreview" hidden></div>
           <div class="form-actions">
             <button type="button" class="btn-secondary" data-modal="tradeModal">Cancel</button>
             <button type="submit" class="btn-primary">Confirm</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Link an MF / Demat account to its settlement bank -->
+  <div class="modal-overlay" id="settlementAccountModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>Linked Settlement Account</h2>
+        <button class="modal-close" data-modal="settlementAccountModal">&#x2715;</button>
+      </div>
+      <div class="modal-body">
+        <p class="trade-info" id="settlementAccountDescription"></p>
+        <form id="settlementAccountForm" autocomplete="off">
+          <input type="hidden" id="settlementInvestmentAccountId" />
+          <div class="form-group">
+            <label>Bank receiving redemptions and withdrawals</label>
+            <select id="settlementBankAccount" required>
+              <option value="">Select bank account</option>
+            </select>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="btn-secondary" data-modal="settlementAccountModal">Cancel</button>
+            <button type="submit" class="btn-primary">Save Link</button>
           </div>
         </form>
       </div>
@@ -1007,13 +1247,66 @@
             <label>Amount (₹)</label>
             <input type="number" id="accountTransactionAmount" min="0.01" step="0.01" required />
           </div>
-          <div class="form-group">
-            <label>Funding / Receiving Account</label>
+          <div class="form-group" id="accountTransactionAccountGroup">
+            <label id="accountTransactionAccountLabel">Funding Account</label>
             <select id="accountTransactionAccount" required><option value="">Select funding account</option></select>
+            <small class="field-help" id="accountTransactionAccountHelp">The deposit will debit this account.</small>
           </div>
           <div class="form-actions">
             <button type="button" class="btn-secondary" data-modal="accountTransactionModal">Cancel</button>
             <button type="submit" class="btn-primary">Add Transaction</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Designate an existing account or holding as emergency reserve -->
+  <div class="modal-overlay" id="emergencyAllocationModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 id="emergencyAllocationTitle">Allocate Emergency Asset</h2>
+        <button class="modal-close" data-modal="emergencyAllocationModal" aria-label="Close">&#x2715;</button>
+      </div>
+      <div class="modal-body">
+        <form id="emergencyAllocationForm" autocomplete="off">
+          <input id="emergencyAllocationId" type="hidden" />
+          <div class="form-group">
+            <label for="emergencyAllocationSource">Existing account or investment</label>
+            <select id="emergencyAllocationSource" required>
+              <option value="">Select an existing asset</option>
+            </select>
+            <small class="field-help">This creates a designation only. It does not move money or alter the asset.</small>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="emergencyAllocationMode">Amount to reserve</label>
+              <select id="emergencyAllocationMode" required>
+                <option value="full">Entire current value</option>
+                <option value="amount">Fixed amount</option>
+              </select>
+            </div>
+            <div class="form-group" id="emergencyAllocationAmountGroup" hidden>
+              <label for="emergencyAllocationAmount">Fixed amount (&#8377;)</label>
+              <input id="emergencyAllocationAmount" type="number" min="0.01" step="0.01" />
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="emergencyAllocationLiquidity">Availability</label>
+            <select id="emergencyAllocationLiquidity" required>
+              <option value="immediate">Available Now</option>
+              <option value="redeemable">Needs Withdrawal / Redemption</option>
+              <option value="locked">Locked / Not Usable Now</option>
+            </select>
+          </div>
+          <div class="reserve-source-preview" id="emergencyAllocationPreview">Select an asset to see its current value.</div>
+          <div class="form-group">
+            <label for="emergencyAllocationNote">Note (optional)</label>
+            <input id="emergencyAllocationNote" type="text" maxlength="160" placeholder="e.g. second-tier emergency reserve" />
+          </div>
+          <div class="form-actions">
+            <button type="button" class="btn-secondary" data-modal="emergencyAllocationModal">Cancel</button>
+            <button type="submit" class="btn-primary">Save Allocation</button>
           </div>
         </form>
       </div>

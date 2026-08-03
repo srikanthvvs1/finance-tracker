@@ -48,9 +48,12 @@ function createExpenseForm() {
   categoryItem.setRequired(true);
   categoryItem.setChoices([
     categoryItem.createChoice('food'),
+    categoryItem.createChoice('grocery'),
     categoryItem.createChoice('travel'),
     categoryItem.createChoice('housing'),
     categoryItem.createChoice('health'),
+    categoryItem.createChoice('personal_care'),
+    categoryItem.createChoice('subscriptions'),
     categoryItem.createChoice('entertainment'),
     categoryItem.createChoice('utilities'),
     categoryItem.createChoice('shopping'),

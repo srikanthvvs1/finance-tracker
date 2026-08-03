@@ -27,6 +27,9 @@ Timestamp | Expense Date | Amount | Category | Description | PaymentMode
 ```
 
 The Apps Script in `config/setup_form.gs` can create the form and worksheet.
+Its category list includes `food`, `grocery`, `travel`, `housing`, `health`,
+`personal_care`, `subscriptions`, `entertainment`, `utilities`, `shopping`, and
+`other`.
 
 ## Sync behavior
 

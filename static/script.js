@@ -3,6 +3,7 @@
    ============================================================ */
 
 let expenses = [];
+let incomeTransactions = [];
 let investments = [];
 let savingsHistory = [];
 let savingsGoals = [];
@@ -10,12 +11,14 @@ let emergencyFund = { target: 0, current: 0, contributions: [] };
 let budgets = [];
 let recurringBills = [];
 let netWorthHistory = [];
+let automaticNetWorthHistory = [];
 let cashFlowSettings = [];
 let accounts = [];
 let transfers = [];
 let recurringRules = [];
 let recurringOccurrences = [];
 let reconciliationAdjustments = [];
+let emergencyAllocations = [];
 
 /* ── Server API base URL (relative — works on any host/port) ── */
 const API_BASE = '/api';
@@ -33,15 +36,21 @@ async function apiPost(path, body) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`POST ${path} → ${res.status}`);
-  return res.json();
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const error = new Error(payload.error || `POST ${path} failed (${res.status})`);
+    error.status = res.status;
+    throw error;
+  }
+  return payload;
 }
 
 /* ── Load all data from server (Excel is the single source of truth) ── */
 async function loadAllData() {
   try {
-    const [exp, inv, sh, sg, ef, budgetRows, billRows, netWorthRows, cashFlowRows, accountRows, transferRows, ruleRows, occurrenceRows, adjustmentRows] = await Promise.all([
+    const [exp, incomeRows, inv, sh, sg, ef, budgetRows, billRows, netWorthRows, automaticNetWorthRows, cashFlowRows, accountRows, transferRows, ruleRows, occurrenceRows, adjustmentRows, emergencyAllocationRows] = await Promise.all([
       apiGet('/expenses'),
+      apiGet('/income-transactions'),
       apiGet('/investments'),
       apiGet('/savings-history'),
       apiGet('/savings-goals'),
@@ -49,14 +58,20 @@ async function loadAllData() {
       apiGet('/budgets'),
       apiGet('/recurring-bills'),
       apiGet('/net-worth'),
+      apiGet('/net-worth-auto').catch(error => {
+        console.warn('Automatic net-worth history is unavailable until the server restarts:', error.message);
+        return [];
+      }),
       apiGet('/cash-flow'),
       apiGet('/accounts'),
       apiGet('/transfers'),
       apiGet('/recurring-rules'),
       apiGet('/recurring-occurrences'),
       apiGet('/reconciliation-adjustments'),
+      apiGet('/emergency-allocations'),
     ]);
     expenses       = exp;
+    incomeTransactions = incomeRows;
     investments    = inv;
     savingsHistory = sh;
     savingsGoals   = sg;
@@ -64,17 +79,20 @@ async function loadAllData() {
     budgets = budgetRows;
     recurringBills = billRows;
     netWorthHistory = netWorthRows;
+    automaticNetWorthHistory = automaticNetWorthRows;
     cashFlowSettings = cashFlowRows;
     accounts = accountRows;
     transfers = transferRows;
     recurringRules = ruleRows;
     recurringOccurrences = occurrenceRows;
     reconciliationAdjustments = adjustmentRows;
+    emergencyAllocations = emergencyAllocationRows;
     serverAvailable = true;
     console.log(`✅ Data loaded from Excel — ${exp.length} expenses, ${inv.length} investments, ${sh.length} savings months, ${sg.length} goals`);
   } catch (e) {
     console.warn('⚠️ Server unavailable — start it with: python server.py', e.message);
     expenses       = [];
+    incomeTransactions = [];
     investments    = [];
     savingsHistory = [];
     savingsGoals   = [];
@@ -82,30 +100,52 @@ async function loadAllData() {
     budgets = [];
     recurringBills = [];
     netWorthHistory = [];
+    automaticNetWorthHistory = [];
     cashFlowSettings = [];
     accounts = [];
     transfers = [];
     recurringRules = [];
     recurringOccurrences = [];
     reconciliationAdjustments = [];
+    emergencyAllocations = [];
     serverAvailable = false;
   }
 }
 
 /* ── Save helpers (fire-and-forget, log errors) ────────────── */
-function saveExpenses()       { if (serverAvailable) apiPost('/expenses', expenses).catch(e => console.error('Save expenses failed:', e)); }
-function saveInvestments()    { if (serverAvailable) apiPost('/investments', investments).catch(e => console.error('Save investments failed:', e)); }
+function saveExpenses(rows = expenses) {
+  if (!serverAvailable) throw new Error('FinTrack server is offline. Start it and refresh before changing expenses.');
+  return apiPost('/expenses', rows);
+}
+function saveIncomeTransactions() { if (serverAvailable) return apiPost('/income-transactions', incomeTransactions); }
+function saveInvestments(rows = investments) {
+  if (!serverAvailable) throw new Error('FinTrack server is offline. Start it and refresh before changing investments.');
+  return apiPost('/investments', rows);
+}
 function saveSavingsHistory() { if (serverAvailable) apiPost('/savings-history', savingsHistory).catch(e => console.error('Save savings history failed:', e)); }
 function saveSavingsGoals()   { if (serverAvailable) apiPost('/savings-goals', savingsGoals).catch(e => console.error('Save goals failed:', e)); }
-function saveEmergencyFund()  { if (serverAvailable) apiPost('/emergency-fund', { target: emergencyFund.target, contributions: emergencyFund.contributions }).catch(e => console.error('Save emergency fund failed:', e)); }
+function saveEmergencyFund() {
+  if (!serverAvailable) throw new Error('FinTrack server is offline. Start it and refresh before changing the emergency target.');
+  return apiPost('/emergency-fund', { target: emergencyFund.target, contributions: emergencyFund.contributions });
+}
 function saveBudgets()        { if (serverAvailable) return apiPost('/budgets', budgets); }
 function saveRecurringBills() { if (serverAvailable) return apiPost('/recurring-bills', recurringBills); }
 function saveNetWorth()       { if (serverAvailable) return apiPost('/net-worth', netWorthHistory); }
+function saveAutomaticNetWorth() { if (serverAvailable) return apiPost('/net-worth-auto', automaticNetWorthHistory); }
 function saveCashFlow()       { if (serverAvailable) return apiPost('/cash-flow', cashFlowSettings); }
-function saveAccounts()       { if (serverAvailable) return apiPost('/accounts', accounts); }
+function saveAccounts(rows = accounts) {
+  if (!serverAvailable) {
+    throw new Error('FinTrack server is offline. Start the server and refresh before adding accounts.');
+  }
+  return apiPost('/accounts', rows);
+}
 function saveTransfers()      { if (serverAvailable) return apiPost('/transfers', transfers); }
 function saveRecurringRules() { if (serverAvailable) return apiPost('/recurring-rules', recurringRules); }
 function saveReconciliationAdjustments() { if (serverAvailable) return apiPost('/reconciliation-adjustments', reconciliationAdjustments); }
+function saveEmergencyAllocations(rows = emergencyAllocations) {
+  if (!serverAvailable) throw new Error('FinTrack server is offline. Start it and refresh before changing emergency allocations.');
+  return apiPost('/emergency-allocations', rows);
+}
 
 /* ── Sync form expenses (Google Form → main Expenses sheet) ── */
 async function syncFormExpenses() {
@@ -153,11 +193,13 @@ function showSyncToast(count) {
    CATEGORY CONFIGURATION
    ============================================================ */
 const categoryConfig = {
-  food:          { label: 'Food',          icon: '🍔', cls: 'cat-food'          },
+  food:          { label: 'Food & Takeaway', icon: '🍔', cls: 'cat-food'          },
   grocery:       { label: 'Grocery',       icon: '🛒', cls: 'cat-grocery'       },
   travel:        { label: 'Travel',        icon: '✈️',  cls: 'cat-travel'        },
   housing:       { label: 'Housing',       icon: '🏠', cls: 'cat-housing'       },
   health:        { label: 'Health',        icon: '⚕️',  cls: 'cat-health'        },
+  personal_care: { label: 'Personal Care', icon: '💇', cls: 'cat-personal-care' },
+  subscriptions: { label: 'Subscriptions & Software', icon: '💻', cls: 'cat-subscriptions' },
   entertainment: { label: 'Entertainment', icon: '🎬', cls: 'cat-entertainment' },
   utilities:     { label: 'Utilities',     icon: '⚡', cls: 'cat-utilities'     },
   shopping:      { label: 'Shopping',      icon: '🛍️', cls: 'cat-shopping'      },
@@ -192,10 +234,134 @@ const payLabels = {
 const fmt = (n) =>
   '₹' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+const fmtNav = (n) =>
+  '₹' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+
+const fmtInvestmentUnitPrice = (inv, value) =>
+  ['mutual_funds', 'nps'].includes(inv?.category) ? fmtNav(value) : fmt(value);
+
+function compactMutualFundName(inv) {
+  const fullName = String(inv?.name || inv?.asset || 'Mutual fund').trim();
+  return fullName
+    .replace(/\s*-\s*(?:direct\s+(?:plan|option)|growth\s+option|growth)\b.*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim() || fullName;
+}
+
 const fmtDate = (d) =>
   new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
-const todayISO = () => new Date().toISOString().split('T')[0];
+const todayISO = () => {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${now.getFullYear()}-${month}-${day}`;
+};
+
+function setAccountSaveStatus(message, state = '') {
+  const node = document.getElementById('accountSaveStatus');
+  if (!node) return;
+  node.textContent = message;
+  node.className = `account-save-status ${state}`.trim();
+}
+
+let mfCatalogStatus = { count: 0, lastRefreshed: null };
+let mfSearchTimer = null;
+let mfSearchResults = [];
+
+function setMfSearchStatus(message, state = '') {
+  const node = document.getElementById('invMfSearchStatus');
+  if (!node) return;
+  node.textContent = message;
+  node.className = `mf-search-status ${state}`.trim();
+}
+
+function mfCatalogStatusText() {
+  if (!mfCatalogStatus.count) return 'No local catalogue yet. Refresh when online, or enter the fund details manually.';
+  const updated = mfCatalogStatus.lastRefreshed
+    ? new Date(mfCatalogStatus.lastRefreshed).toLocaleString()
+    : 'date unavailable';
+  return `${Number(mfCatalogStatus.count).toLocaleString('en-IN')} schemes available offline · updated ${updated}`;
+}
+
+async function loadMfCatalogStatus(autoRefreshEmpty = false) {
+  if (!serverAvailable) return;
+  try {
+    mfCatalogStatus = await apiGet('/mutual-funds/catalog/status');
+    setMfSearchStatus(mfCatalogStatusText(), mfCatalogStatus.count ? 'success' : 'warning');
+    if (autoRefreshEmpty && !mfCatalogStatus.count) {
+      setMfSearchStatus('Downloading the mutual-fund catalogue in the background…');
+      apiPost('/mutual-funds/catalog/refresh', {}).then(result => {
+        mfCatalogStatus = result;
+        setMfSearchStatus(mfCatalogStatusText(), 'success');
+      }).catch(() => setMfSearchStatus(
+        'Offline — catalogue download postponed. Manual fund entry is still available.', 'warning'
+      ));
+    }
+  } catch (_error) {
+    setMfSearchStatus('Catalogue status unavailable. Manual fund entry is still available.', 'warning');
+  }
+}
+
+function renderMfSearchResults(items) {
+  mfSearchResults = items || [];
+  const container = document.getElementById('invMfSearchResults');
+  if (!container) return;
+  container.innerHTML = mfSearchResults.map((item, index) => `
+    <button type="button" class="mf-scheme-result" role="option" data-mf-result="${index}">
+      <strong>${escHtml(item.schemeName)}</strong>
+      <span>${escHtml(item.fundHouse || item.schemeCategory || 'Mutual fund')} · Scheme ${escHtml(String(item.schemeCode))}</span>
+    </button>`).join('');
+}
+
+async function selectMutualFundScheme(item) {
+  if (!item) return;
+  document.getElementById('invSchemeCode').value = String(item.schemeCode);
+  document.getElementById('invMfSearch').value = item.schemeName;
+  document.getElementById('invAsset').value = `MF-${item.schemeCode}`;
+  document.getElementById('invName').value = item.schemeName;
+  renderMfSearchResults([]);
+  setMfSearchStatus(`Selected ${item.schemeName}. Checking the latest NAV…`, 'success');
+  try {
+    const nav = await apiGet(`/price/mf/${encodeURIComponent(item.schemeCode)}`);
+    if (Number(nav.nav) > 0) document.getElementById('invCurrPrice').value = Number(nav.nav);
+    const source = nav.offline || nav.cached ? 'saved NAV' : 'latest NAV';
+    setMfSearchStatus(
+      `Selected · ${source} ${fmtNav(nav.nav)}${nav.date ? ` as of ${nav.date}` : ''}`,
+      nav.offline ? 'warning' : 'success'
+    );
+  } catch (_error) {
+    setMfSearchStatus('Scheme selected. NAV is unavailable offline; enter the current NAV manually.', 'warning');
+  }
+}
+
+async function searchMutualFundSchemes(query) {
+  const value = String(query || '').trim();
+  if (value.length < 2) {
+    renderMfSearchResults([]);
+    setMfSearchStatus(mfCatalogStatusText(), mfCatalogStatus.count ? 'success' : 'warning');
+    return;
+  }
+  setMfSearchStatus('Searching the local catalogue…');
+  try {
+    const result = await apiGet(`/mutual-funds/search?q=${encodeURIComponent(value)}&limit=25`);
+    mfCatalogStatus = { count: result.count, lastRefreshed: result.lastRefreshed };
+    renderMfSearchResults(result.items || []);
+    if (result.items?.length) {
+      setMfSearchStatus(`${result.items.length} matching schemes · ${mfCatalogStatusText()}`, 'success');
+    } else {
+      setMfSearchStatus(
+        mfCatalogStatus.count
+          ? 'No cached match. Refresh the catalogue when online or enter fund details manually.'
+          : 'No local catalogue is available. Refresh when online or enter fund details manually.',
+        'warning'
+      );
+    }
+  } catch (_error) {
+    renderMfSearchResults([]);
+    setMfSearchStatus('Offline search unavailable. Enter fund details and NAV manually.', 'warning');
+  }
+}
 
 
 /* ============================================================
@@ -299,7 +465,7 @@ async function refreshAllPrices() {
   });
   await Promise.all(tasks);
   /* Persist updated prices to Excel */
-  if (updated > 0) saveInvestments();
+  if (updated > 0) saveInvestments().catch(error => console.error('Save investments failed:', error));
   return { updated, failed, skipped, total: investments.length };
 }
 
@@ -488,6 +654,8 @@ function closeModal(id) {
   if (id === 'investmentModal') {
     const dyn = document.getElementById('invDynamicFields');
     if (dyn) dyn.style.display = 'none';
+    renderMfSearchResults([]);
+    setMfSearchStatus(mfCatalogStatusText(), mfCatalogStatus.count ? 'success' : 'warning');
     /* Unhide all type options */
     document.getElementById('invType')?.querySelectorAll('option').forEach(o => o.hidden = false);
   }
@@ -497,31 +665,33 @@ document.querySelectorAll('.modal-close, .btn-secondary[data-modal]').forEach(bt
   btn.addEventListener('click', () => closeModal(btn.dataset.modal));
 });
 
-document.querySelectorAll('.modal-overlay').forEach(overlay => {
-  overlay.addEventListener('click', e => {
-    if (e.target === overlay) overlay.classList.remove('open');
-  });
-});
-
-
 /* ============================================================
    RENDER: RECENT TRANSACTIONS (Dashboard widget)
    ============================================================ */
 function renderRecentTransactions() {
   const el = document.getElementById('recentTransactions');
   if (!el) return;
-
-  const recent = expensesForMonth().slice(-5).reverse();
-  el.innerHTML = recent.map(t => {
-    const cat = categoryConfig[t.category] || categoryConfig.other;
+  const range = dashboardPeriodRange();
+  const activity = [
+    ...expenses.filter(row => dateInRange(row.date, range)).map(row => ({ ...row, activityType: 'expense' })),
+    ...incomeTransactions.filter(row => dateInRange(row.date, range)).map(row => ({ ...row, activityType: 'income' })),
+  ].sort((a, b) => String(b.date).localeCompare(String(a.date)) || Number(b.id || 0) - Number(a.id || 0)).slice(0, 7);
+  if (!activity.length) {
+    el.innerHTML = '<p class="inv-panel-empty">No income or expenses in this period.</p>';
+    return;
+  }
+  el.innerHTML = activity.map(t => {
+    const isIncome = t.activityType === 'income';
+    const cat = isIncome ? { cls: 'cat-income', icon: '₹', label: incomeSourceLabel(t.source) }
+      : (categoryConfig[t.category] || categoryConfig.other);
     return `
       <div class="transaction-item">
         <div class="txn-icon ${cat.cls}">${cat.icon}</div>
         <div class="txn-info">
-          <div class="txn-desc">${escHtml(t.description)}</div>
-          <div class="txn-date">${fmtDate(t.date)} &bull; ${cat.label}</div>
+          <div class="txn-desc">${escHtml(t.description || cat.label)}</div>
+          <div class="txn-date">${fmtDate(t.date)} &bull; ${cat.label}${isIncome ? ` &bull; ${escHtml(accountName(t.accountId))}` : ''}</div>
         </div>
-        <div class="txn-amount negative">-${fmt(t.amount)}</div>
+        <div class="txn-amount ${isIncome ? 'positive' : 'negative'}">${isIncome ? '+' : '-'}${fmt(t.amount)}</div>
       </div>`;
   }).join('');
 }
@@ -731,18 +901,55 @@ document.getElementById('expensesTableBody')?.addEventListener('click', e => {
     const idx = expenses.findIndex(x => x.id === id);
     if (idx !== -1) {
       expenses.splice(idx, 1);
-      saveExpenses();
+      saveExpenses().catch(error => console.error('Save expenses failed:', error));
       refreshDashboard();
     }
   }
 });
 
-// Clear all buttons
+// Deleting every expense is deliberately harder than deleting one row. The
+// local array is not changed until the server has saved and returned the empty
+// Expenses worksheet.
 document.getElementById('clearExpensesBtn')?.addEventListener('click', () => {
-  if (confirm('Clear ALL expense entries? This cannot be undone.')) {
-    expenses.length = 0;
-    saveExpenses();
+  if (!expenses.length) {
+    alert('There are no expense entries to delete.');
+    return;
+  }
+  const total = expenses.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  document.getElementById('clearExpensesCount').textContent =
+    `${expenses.length} expense${expenses.length === 1 ? '' : 's'}`;
+  document.getElementById('clearExpensesTotal').textContent = fmt(total);
+  const confirmation = document.getElementById('clearExpensesConfirmation');
+  const deleteButton = document.getElementById('confirmClearExpensesBtn');
+  confirmation.value = '';
+  deleteButton.disabled = true;
+  deleteButton.textContent = 'Delete All Expenses';
+  openModal('clearExpensesModal');
+  setTimeout(() => confirmation.focus(), 0);
+});
+
+document.getElementById('clearExpensesConfirmation')?.addEventListener('input', event => {
+  document.getElementById('confirmClearExpensesBtn').disabled =
+    event.target.value.trim() !== 'DELETE';
+});
+
+document.getElementById('clearExpensesForm')?.addEventListener('submit', async event => {
+  event.preventDefault();
+  const confirmation = document.getElementById('clearExpensesConfirmation');
+  const deleteButton = document.getElementById('confirmClearExpensesBtn');
+  if (confirmation.value.trim() !== 'DELETE') return;
+  deleteButton.disabled = true;
+  deleteButton.textContent = 'Deleting...';
+  try {
+    await saveExpenses([]);
+    expenses = await apiGet('/expenses');
     refreshDashboard();
+    closeModal('clearExpensesModal');
+  } catch (error) {
+    alert(`Expenses were not deleted.\n\n${error.message}`);
+  } finally {
+    deleteButton.textContent = 'Delete All Expenses';
+    deleteButton.disabled = confirmation.value.trim() !== 'DELETE';
   }
 });
 
@@ -750,7 +957,7 @@ document.getElementById('clearExpensesBtn')?.addEventListener('click', () => {
 document.getElementById('clearInvestmentsBtn')?.addEventListener('click', () => {
   if (confirm('Clear ALL investment holdings? This cannot be undone.')) {
     investments.length = 0;
-    saveInvestments();
+    saveInvestments().catch(error => console.error('Save investments failed:', error));
     renderInvestmentsTable();
     renderInvestmentSnapshot();
   }
@@ -843,8 +1050,81 @@ const invFieldCfg = {
   gold:          { asset:'Gold Type',     assetPh:'e.g. PHYSICAL, SGB', name:'Description',  namePh:'e.g. Physical Gold 24K',   units:'Quantity (g)',   buy:'Buy Price (₹ / g)',       curr:'Current Price (₹ / g)' },
   ppf:           { asset:'Account ID',    assetPh:'e.g. PPF-SBI',       name:'Account Name', namePh:'e.g. PPF – State Bank',    units:'Account',       buy:'Total Deposited (₹)',     curr:'Current Balance (₹)' },
   nps:           { asset:'Account ID',    assetPh:'e.g. NPS-TIER1',     name:'Account Name', namePh:'e.g. NPS Tier-1',          units:'Units',         buy:'Buy NAV (₹)',             curr:'Current NAV (₹)' },
-  fixed_deposit: { asset:'FD Reference',  assetPh:'e.g. SBI-FD-2025',   name:'Description',  namePh:'e.g. SBI FD 3yr @7.1%',   units:'Deposits',      buy:'Principal (₹)',           curr:'Maturity Value (₹)' },
+  fixed_deposit: { asset:'FD Reference',  assetPh:'e.g. SBI-FD-2025',   name:'Description',  namePh:'e.g. SBI FD 3yr @7.1%',   units:'Deposits',      buy:'Principal (₹)',           curr:'Current Balance (₹)' },
 };
+
+const incomeSourceConfig = {
+  salary: 'Salary', bonus: 'Bonus', freelance: 'Freelance', business: 'Business',
+  interest: 'Interest', dividend: 'Dividend', rent: 'Rent received', gift: 'Gift',
+  other: 'Other income',
+};
+
+function incomeSourceLabel(source) {
+  return incomeSourceConfig[String(source || 'other').toLowerCase()] || 'Other income';
+}
+
+const investmentAccountTypeByCategory = {
+  stocks: 'demat', foreign_stocks: 'demat', mutual_funds: 'mutual_fund',
+  gold: 'gold', ppf: 'ppf', nps: 'nps', fixed_deposit: 'fixed_deposit',
+};
+
+function populateCompatibleInvestmentAccounts(category) {
+  const select = document.getElementById('invContainerAccount');
+  if (!select) return;
+  const requiredType = investmentAccountTypeByCategory[category];
+  const previous = select.value;
+  const matching = activeAccounts().filter(account =>
+    String(account.type || '').trim().toLowerCase() === requiredType
+  );
+  const typeName = accountTypeLabels[requiredType] || 'compatible investment';
+  select.innerHTML = matching.length
+    ? '<option value="">Select investment account</option>' + matching.map(account =>
+      `<option value="${account.id}">${escHtml(account.name)}</option>`
+    ).join('')
+    : `<option value="" selected disabled>No ${escHtml(typeName)} account found — add one under Accounts</option>`;
+  if (matching.some(account => String(account.id) === previous)) select.value = previous;
+  else if (matching.length === 1) select.value = String(matching[0].id);
+  select.setCustomValidity(matching.length ? '' : `Create a ${typeName} account under Accounts before adding this investment.`);
+  const help = document.getElementById('invContainerHelp');
+  if (help) help.textContent = matching.length
+    ? `The holding's current value will be shown in this ${typeName} account.`
+    : `No compatible account exists. Create a ${typeName} account in Accounts first.`;
+}
+
+function updateInvestmentEntryMode() {
+  const form = document.getElementById('investmentForm');
+  if (!form) return;
+  const category = document.getElementById('invType')?.value || '';
+  const prior = form.querySelector('input[name="entryMode"]:checked')?.value === 'prior';
+  const balanceAccount = balanceCategories.includes(category);
+  const fundingGroup = document.getElementById('invFundingAccountGroup');
+  const fundingSelect = document.getElementById('invAccount');
+  if (fundingGroup) fundingGroup.style.display = prior ? 'none' : '';
+  if (fundingSelect) {
+    fundingSelect.required = !prior;
+    if (prior) fundingSelect.value = '';
+    else if (!fundingSelect.value) fundingSelect.value = String(defaultAccountId('investment') || '');
+  }
+  const currentGroup = document.getElementById('invCurrPriceGroup');
+  const currentInput = document.getElementById('invCurrPrice');
+  if (currentGroup) currentGroup.style.display = balanceAccount && !prior ? 'none' : '';
+  if (currentInput) currentInput.required = !(balanceAccount && !prior);
+  const help = document.getElementById('invEntryModeHelp');
+  if (help) help.textContent = prior
+    ? 'This creates an opening position. It will not debit a salary, savings, or other funding account.'
+    : 'This purchase or deposit will debit the selected funding account.';
+  const dateLabel = document.getElementById('invDateLabel');
+  if (dateLabel) dateLabel.textContent = prior ? 'Position As Of Date' : 'Purchase Date';
+  const cfg = invFieldCfg[category] || {};
+  const buyLabel = document.getElementById('invBuyPriceLabel');
+  const currentLabel = document.getElementById('invCurrPriceLabel');
+  if (buyLabel) buyLabel.innerHTML = balanceAccount
+    ? (prior ? 'Principal / Cost Basis (₹)' : 'Deposit Amount (₹)')
+    : (prior ? 'Average Cost (₹ per unit)' : (cfg.buy || 'Buy Price (₹)'));
+  if (currentLabel) currentLabel.innerHTML = balanceAccount
+    ? 'Current Balance (₹)'
+    : (cfg.curr || 'Current Price (₹)');
+}
 
 /* Show/hide fields + update labels when investment type changes */
 document.getElementById('invType')?.addEventListener('change', e => {
@@ -853,20 +1133,7 @@ document.getElementById('invType')?.addEventListener('change', e => {
   if (dynFields) dynFields.style.display = cat ? '' : 'none';
   if (!cat) return;
 
-  const requiredAccountType = {
-    stocks: 'demat', foreign_stocks: 'demat', mutual_funds: 'mutual_fund',
-    gold: 'gold', ppf: 'ppf', nps: 'nps', fixed_deposit: 'fixed_deposit',
-  }[cat];
-  const containerSelect = document.getElementById('invContainerAccount');
-  if (containerSelect) {
-    const matchingAccounts = activeAccounts().filter(
-      account => account.type === requiredAccountType
-    );
-    containerSelect.innerHTML = '<option value="">Select investment account</option>'
-      + matchingAccounts.map(account =>
-        `<option value="${account.id}">${escHtml(account.name)}</option>`
-      ).join('');
-  }
+  populateCompatibleInvestmentAccounts(cat);
 
   /* Update labels & placeholders */
   const cfg = invFieldCfg[cat] || {};
@@ -880,13 +1147,10 @@ document.getElementById('invType')?.addEventListener('change', e => {
   setLabel('invBuyPriceLabel', cfg.buy   || 'Buy Price (₹)');
   setLabel('invCurrPriceLabel',cfg.curr  || 'Current Price (₹)');
 
-  /* Market cap & risk fields */
-  const mktFields = document.getElementById('invMarketFields');
-  if (mktFields) mktFields.style.display = marketCategories.includes(cat) ? '' : 'none';
-
   /* MF scheme-code field */
   const schemeGroup = document.getElementById('invSchemeGroup');
   if (schemeGroup) schemeGroup.style.display = cat === 'mutual_funds' ? '' : 'none';
+  if (cat === 'mutual_funds') loadMfCatalogStatus(false);
 
   const isBalanceAccount = ['ppf', 'fixed_deposit'].includes(cat);
   const unitsGroup = document.getElementById('invUnitsGroup');
@@ -895,6 +1159,48 @@ document.getElementById('invType')?.addEventListener('change', e => {
   if (unitsInput) {
     unitsInput.required = !isBalanceAccount;
     unitsInput.value = isBalanceAccount ? '1' : '';
+  }
+  updateInvestmentEntryMode();
+});
+
+document.querySelectorAll('input[name="entryMode"]').forEach(input => {
+  input.addEventListener('change', updateInvestmentEntryMode);
+});
+
+document.getElementById('invMfSearch')?.addEventListener('input', event => {
+  document.getElementById('invSchemeCode').value = '';
+  clearTimeout(mfSearchTimer);
+  mfSearchTimer = setTimeout(() => searchMutualFundSchemes(event.target.value), 300);
+});
+
+document.getElementById('invMfSearchResults')?.addEventListener('click', event => {
+  const button = event.target.closest('[data-mf-result]');
+  if (!button) return;
+  selectMutualFundScheme(mfSearchResults[Number(button.dataset.mfResult)]);
+});
+
+document.getElementById('refreshMfCatalogBtn')?.addEventListener('click', async () => {
+  const button = document.getElementById('refreshMfCatalogBtn');
+  if (button) { button.disabled = true; button.textContent = 'Refreshing…'; }
+  setMfSearchStatus('Downloading scheme metadata for offline search…');
+  try {
+    const result = await apiPost('/mutual-funds/catalog/refresh', {});
+    mfCatalogStatus = result;
+    setMfSearchStatus(mfCatalogStatusText(), 'success');
+    const query = document.getElementById('invMfSearch')?.value;
+    if (query?.trim()) await searchMutualFundSchemes(query);
+  } catch (_error) {
+    setMfSearchStatus('Refresh failed. The existing offline catalogue is still available.', 'warning');
+  } finally {
+    if (button) { button.disabled = false; button.textContent = 'Refresh catalogue'; }
+  }
+});
+
+document.getElementById('invBuyPrice')?.addEventListener('input', event => {
+  const category = document.getElementById('invType')?.value;
+  const prior = document.querySelector('input[name="entryMode"]:checked')?.value === 'prior';
+  if (balanceCategories.includes(category) && !prior) {
+    document.getElementById('invCurrPrice').value = event.target.value;
   }
 });
 
@@ -927,6 +1233,22 @@ const marketCategories = ['stocks', 'foreign_stocks', 'mutual_funds'];
 const otherCategories  = ['gold', 'ppf', 'nps', 'fixed_deposit'];
 const tradableCategories = ['stocks', 'foreign_stocks', 'mutual_funds', 'gold'];
 const balanceCategories = ['ppf', 'fixed_deposit'];
+
+function transactionGrossAmount(tx) {
+  return Number(tx?.units || 0) * Number(tx?.price || 0);
+}
+
+function transactionCashAmount(tx) {
+  const gross = transactionGrossAmount(tx);
+  const charges = Math.max(0, Number(tx?.charges || 0));
+  return ['SELL', 'WITHDRAWAL'].includes(tx?.action)
+    ? Math.max(0, gross - charges)
+    : gross + (tx?.action === 'BUY' ? charges : 0);
+}
+
+function transactionCashDate(tx) {
+  return String(tx?.settlementDate || tx?.date || '');
+}
 
 /**
  * Calculate holdings using moving-average cost. SELL proceeds reduce units at
@@ -973,24 +1295,26 @@ function investmentMetrics(inv, cutoffDate = null) {
   let units = 0;
   let costBasis = 0;
   let realizedGain = 0;
-  const txns = [...(inv.transactions || [])]
+  const allTxns = [...(inv.transactions || [])];
+  const txns = allTxns
     .filter(tx => !cutoffDate || new Date(tx.date) <= cutoffDate)
     .sort((a, b) => String(a.date).localeCompare(String(b.date)));
   for (const tx of txns) {
     const quantity = Number(tx.units || 0);
     const price = Number(tx.price || 0);
+    const charges = Math.max(0, Number(tx.charges || 0));
     if (tx.action === 'BUY') {
       units += quantity;
-      costBasis += quantity * price;
+      costBasis += quantity * price + charges;
     } else if (tx.action === 'SELL' && units > 0) {
       const sold = Math.min(quantity, units);
       const averageCost = costBasis / units;
-      realizedGain += sold * (price - averageCost);
+      realizedGain += sold * price - charges - sold * averageCost;
       units -= sold;
       costBasis -= sold * averageCost;
     }
   }
-  if (!txns.length) {
+  if (!allTxns.length) {
     units = Number(inv.units || 0);
     costBasis = units * Number(inv.buyPrice || 0);
   }
@@ -1023,12 +1347,18 @@ function buildTxnLog(inv) {
     const metrics = investmentMetrics(inv);
     const rows = [...txns].sort((a, b) => String(b.date).localeCompare(String(a.date))).map(tx => {
       const amount = Number(tx.units || 0) * Number(tx.price || 0);
-      const isOutflow = tx.action === 'WITHDRAWAL';
+      const opening = String(tx.source || '').toLowerCase() === 'opening';
+      const isOutflow = tx.action === 'WITHDRAWAL' || amount < 0;
+      const actionLabel = opening
+        ? (tx.action === 'DEPOSIT' ? 'OPENING PRINCIPAL'
+          : tx.action === 'INTEREST' ? 'OPENING INTEREST'
+            : 'OPENING VALUE')
+        : tx.action;
       return `<tr>
         <td>${fmtDate(tx.date)}</td>
-        <td><span class="txn-badge ${isOutflow ? 'txn-sell' : 'txn-buy'}">${escHtml(tx.action)}</span></td>
-        <td style="font-weight:600" class="${isOutflow ? 'gain-negative' : ''}">${isOutflow ? '-' : '+'}${fmt(amount)}</td>
-        <td>${escHtml(accountName(tx.accountId))}</td>
+        <td><span class="txn-badge ${opening ? 'txn-opening' : isOutflow ? 'txn-sell' : 'txn-buy'}">${escHtml(actionLabel)}</span></td>
+        <td style="font-weight:600" class="${isOutflow ? 'gain-negative' : ''}">${isOutflow ? '-' : '+'}${fmt(Math.abs(amount))}</td>
+        <td>${opening ? 'Opening position · no bank debit' : escHtml(accountName(tx.accountId))}</td>
       </tr>`;
     }).join('');
     return `
@@ -1037,43 +1367,53 @@ function buildTxnLog(inv) {
         <tbody>${rows}</tbody>
       </table>
       <div class="txn-summary">
-        ${txns.length} transactions · Deposited: ${fmt(metrics.deposits || 0)}
-        · Interest: ${fmt(metrics.interest || 0)} · Balance: ${fmt(metrics.currentValue)}
+        <div><span>Transactions</span><strong>${txns.length}</strong></div>
+        <div><span>Deposited</span><strong>${fmt(metrics.deposits || 0)}</strong></div>
+        <div><span>Interest</span><strong class="gain-positive">${fmt(metrics.interest || 0)}</strong></div>
+        <div><span>Balance</span><strong>${fmt(metrics.currentValue)}</strong></div>
       </div>`;
   }
 
   let totalBought = 0, totalSold = 0, totalBuyCost = 0, totalSellRevenue = 0;
   txns.forEach(t => {
-    if (t.action === 'BUY')  { totalBought += t.units; totalBuyCost += t.units * t.price; }
-    if (t.action === 'SELL') { totalSold   += t.units; totalSellRevenue += t.units * t.price; }
+    if (t.action === 'BUY')  { totalBought += t.units; totalBuyCost += transactionCashAmount(t); }
+    if (t.action === 'SELL') { totalSold   += t.units; totalSellRevenue += transactionCashAmount(t); }
   });
 
   const rows = txns.map(t => {
-    const total = t.units * t.price;
+    const total = transactionCashAmount(t);
+    const charges = Math.max(0, Number(t.charges || 0));
     const isBuy = t.action === 'BUY';
+    const opening = String(t.source || '').toLowerCase() === 'opening';
     return `<tr>
       <td>${fmtDate(t.date)}</td>
-      <td><span class="txn-badge ${isBuy ? 'txn-buy' : 'txn-sell'}">${t.action}</span></td>
+      <td>${t.settlementDate && t.settlementDate !== t.date ? fmtDate(t.settlementDate) : '—'}</td>
+      <td><span class="txn-badge ${opening ? 'txn-opening' : isBuy ? 'txn-buy' : 'txn-sell'}">${opening ? 'OPENING POSITION' : t.action}</span></td>
       <td>${t.units}</td>
-      <td>${fmt(t.price)}</td>
+      <td>${fmtInvestmentUnitPrice(inv, t.price)}</td>
+      <td>${charges > 0 ? fmt(charges) : '—'}</td>
       <td style="font-weight:600">${fmt(total)}</td>
-      <td>${escHtml(accountName(t.accountId))}</td>
+      <td>${opening ? 'No bank debit' : escHtml(accountName(t.accountId))}</td>
     </tr>`;
   }).join('');
 
-  const summaryParts = [`${txns.length} transaction${txns.length !== 1 ? 's' : ''}`];
-  if (totalBought > 0) summaryParts.push(`Bought: ${totalBought} units (${fmt(totalBuyCost)})`);
-  if (totalSold > 0)   summaryParts.push(`Sold: ${totalSold} units (${fmt(totalSellRevenue)})`);
+  const includesOpening = txns.some(tx => String(tx.source || '').toLowerCase() === 'opening');
   const realizedGain = investmentMetrics(inv).realizedGain;
-  if (totalSold > 0) summaryParts.push(`Realised P&L: ${realizedGain >= 0 ? '+' : ''}${fmt(realizedGain)}`);
-  summaryParts.push(`Net: ${totalBought - totalSold} units held`);
+  const summaryMetrics = [
+    `<div><span>Transactions</span><strong>${txns.length}</strong></div>`,
+    totalBought > 0 ? `<div><span>Bought</span><strong>${totalBought} units · ${fmt(totalBuyCost)}</strong></div>` : '',
+    totalSold > 0 ? `<div><span>Sold</span><strong>${totalSold} units · ${fmt(totalSellRevenue)}</strong></div>` : '',
+    totalSold > 0 ? `<div><span>Realised P&amp;L</span><strong class="${realizedGain >= 0 ? 'gain-positive' : 'gain-negative'}">${realizedGain >= 0 ? '+' : ''}${fmt(realizedGain)}</strong></div>` : '',
+    `<div><span>Units Held</span><strong>${totalBought - totalSold}</strong></div>`,
+  ].filter(Boolean).join('');
 
   return `
     <table class="txn-table">
-      <thead><tr><th>Date</th><th>Action</th><th>Units</th><th>Price</th><th>Total</th><th>Account</th></tr></thead>
+      <thead><tr><th>Trade Date</th><th>Credit Date</th><th>Action</th><th>Units</th><th>Price/NAV</th><th>Charges</th><th>Net Amount</th><th>Account</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
-    <div class="txn-summary">${summaryParts.join('  ·  ')}</div>
+    <div class="txn-summary">${summaryMetrics}</div>
+    ${includesOpening ? '<div class="txn-summary-note">Includes prior opening position.</div>' : ''}
   `;
 }
 
@@ -1109,12 +1449,17 @@ function buildMarketPanel(items) {
       const gainPct    = invested > 0 ? (gain / invested * 100).toFixed(2) : '0.00';
       const isP        = gain >= 0;
       const txnCount   = (inv.transactions || []).length;
+      const isMutualFund = inv.category === 'mutual_funds';
+      const holdingName = isMutualFund ? (inv.name || inv.asset) : inv.asset;
+      const holdingDetail = isMutualFund
+        ? `Scheme code: ${inv.schemeCode || String(inv.asset || '').replace(/^MF-/i, '')}`
+        : inv.name;
       return `
         <tr class="holding-row" data-inv-id="${inv.id}" title="Click to view transaction history">
-          <td><strong>${escHtml(inv.asset)}</strong><br><small style="color:var(--text-muted)">${escHtml(inv.name)}</small></td>
+          <td><strong>${escHtml(holdingName)}</strong>${inv.entryMode === 'prior' ? '<span class="opening-position-badge">Prior position</span>' : ''}<br><small style="color:var(--text-muted)">${escHtml(holdingDetail)}</small></td>
           <td>${inv.units}</td>
-          <td>${fmt(inv.buyPrice)}</td>
-          <td>${fmt(inv.currentPrice)}</td>
+          <td>${fmtInvestmentUnitPrice(inv, inv.buyPrice)}</td>
+          <td>${fmtInvestmentUnitPrice(inv, inv.currentPrice)}</td>
           <td style="font-weight:600;">${fmt(invested)}</td>
           <td style="font-weight:600;">${fmt(currentVal)}</td>
           <td class="${isP ? 'gain-positive' : 'gain-negative'}">${isP ? '+' : ''}${fmt(gain)}</td>
@@ -1140,7 +1485,7 @@ function buildMarketPanel(items) {
           <span class="inv-sub-summary">${fmt(grpCurrent)} <span class="${isPos ? 'gain-positive' : 'gain-negative'}">(${isPos ? '+' : ''}${grpPct}%)</span></span>
         </div>
         <table class="data-table">
-          <thead><tr><th>Asset</th><th>Units</th><th>Buy Price</th><th>Current Price</th><th>Invested</th><th>Current Value</th><th>Gain / Loss</th><th>Return %</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Holding</th><th>Units</th><th>Buy Price</th><th>Current Price</th><th>Invested</th><th>Current Value</th><th>Gain / Loss</th><th>Return %</th><th>Actions</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>`;
@@ -1182,7 +1527,7 @@ function buildOtherPanel(items) {
       return `
         <div class="otile-holding">
           <div class="otile-row holding-row" data-inv-id="${inv.id}" title="Click to view transaction history">
-            <div class="otile-name"><strong>${escHtml(inv.asset)}</strong><small>${escHtml(inv.name)}</small></div>
+            <div class="otile-name"><strong>${escHtml(inv.asset)}${inv.entryMode === 'prior' ? '<span class="opening-position-badge">Prior position</span>' : ''}</strong><small>${escHtml(inv.name)}</small></div>
             <div class="otile-actions">
               ${txnCount > 0 ? '<span class="txn-count">📋' + txnCount + '</span>' : ''}
               ${tradableCategories.includes(inv.category) ? `<button class="action-btn buy-btn" title="Buy More" data-id="${inv.id}">🛒</button><button class="action-btn sell-btn" title="Sell" data-id="${inv.id}">💰</button>` : ''}
@@ -1190,7 +1535,7 @@ function buildOtherPanel(items) {
               <button class="action-btn delete" title="Delete" data-id="${inv.id}">🗑️</button>
             </div>
           </div>
-          <div class="otile-stats">
+          <div class="otile-stats metric-blocks">
             ${balanceCategories.includes(inv.category) ? `
               <div><span>Deposited</span><strong>${fmt(metrics.deposits ?? invested)}</strong></div>
               <div><span>Interest</span><strong class="gain-positive">${fmt(metrics.interest ?? gain)}</strong></div>
@@ -1317,9 +1662,13 @@ function bindInvestmentActions(container) {
   container.querySelectorAll('.action-btn.delete').forEach(btn => {
     btn.addEventListener('click', () => {
       const id = parseInt(btn.dataset.id);
+      if (emergencyAllocations.some(row => row.sourceType === 'investment' && Number(row.sourceId) === id)) {
+        alert('This holding is assigned to the Emergency Reserve. Remove its allocation before deleting the holding.');
+        return;
+      }
       if (confirm('Delete this investment?')) {
         const idx = investments.findIndex(x => x.id === id);
-        if (idx !== -1) { investments.splice(idx, 1); saveInvestments(); renderAfterInvestmentChange(); }
+        if (idx !== -1) { investments.splice(idx, 1); saveInvestments().catch(error => console.error('Save investments failed:', error)); renderAfterInvestmentChange(); }
       }
     });
   });
@@ -1355,21 +1704,46 @@ function bindInvestmentActions(container) {
       document.getElementById('accountTransactionDate').value = todayISO();
       document.getElementById('accountTransactionAccount').value =
         String(defaultAccountId('investment') || '');
+      updateBalanceTransactionRouting();
       openModal('accountTransactionModal');
     });
   });
 }
 
-document.getElementById('accountTransactionForm')?.addEventListener('submit', event => {
+function updateBalanceTransactionRouting() {
+  const action = document.getElementById('accountTransactionType')?.value || 'DEPOSIT';
+  const group = document.getElementById('accountTransactionAccountGroup');
+  const select = document.getElementById('accountTransactionAccount');
+  const label = document.getElementById('accountTransactionAccountLabel');
+  const help = document.getElementById('accountTransactionAccountHelp');
+  const requiresCashAccount = ['DEPOSIT', 'WITHDRAWAL'].includes(action);
+  if (group) group.hidden = !requiresCashAccount;
+  if (select) {
+    select.required = requiresCashAccount;
+    if (!requiresCashAccount) select.value = '';
+  }
+  if (label) label.textContent = action === 'WITHDRAWAL' ? 'Receiving Account' : 'Funding Account';
+  if (help) help.textContent = action === 'WITHDRAWAL'
+    ? 'The withdrawal will credit this account.'
+    : 'The deposit will debit this account.';
+}
+
+document.getElementById('accountTransactionType')?.addEventListener('change', updateBalanceTransactionRouting);
+
+document.getElementById('accountTransactionForm')?.addEventListener('submit', async event => {
   event.preventDefault();
   const inv = investments.find(x => x.id === Number(event.target.dataset.invId));
   if (!inv) return;
+  const action = document.getElementById('accountTransactionType').value;
   const transaction = {
     date: document.getElementById('accountTransactionDate').value,
-    action: document.getElementById('accountTransactionType').value,
+    action,
     units: 1,
     price: Number(document.getElementById('accountTransactionAmount').value),
-    accountId: Number(document.getElementById('accountTransactionAccount').value) || null,
+    accountId: ['DEPOSIT', 'WITHDRAWAL'].includes(action)
+      ? Number(document.getElementById('accountTransactionAccount').value) || null
+      : null,
+    source: 'connected',
   };
   if (!transaction.date || !Number.isFinite(transaction.price) || transaction.price <= 0) return;
   inv.transactions = inv.transactions || [];
@@ -1381,21 +1755,106 @@ document.getElementById('accountTransactionForm')?.addEventListener('submit', ev
     return;
   }
   inv.units = 1;
+  const previousBuyPrice = inv.buyPrice;
+  const previousCurrentPrice = inv.currentPrice;
   inv.buyPrice = metrics.costBasis;
   inv.currentPrice = metrics.currentValue;
-  saveInvestments();
-  renderAfterInvestmentChange();
-  closeModal('accountTransactionModal');
+  const submitButton = event.submitter || event.target.querySelector('button[type="submit"]');
+  if (submitButton) submitButton.disabled = true;
+  try {
+    await saveInvestments();
+    investments = await apiGet('/investments');
+    renderAfterInvestmentChange();
+    closeModal('accountTransactionModal');
+  } catch (error) {
+    inv.transactions.pop();
+    inv.buyPrice = previousBuyPrice;
+    inv.currentPrice = previousCurrentPrice;
+    alert(`Transaction was not saved.\n\n${error.message}`);
+  } finally {
+    if (submitButton) submitButton.disabled = false;
+  }
 });
 
 /* ============================================================
    TRADE MODAL (BUY / SELL)
    ============================================================ */
+function openSettlementAccountModal(accountId) {
+  const investmentAccount = accounts.find(row => Number(row.id) === Number(accountId));
+  if (!investmentAccount || !['demat', 'mutual_fund'].includes(investmentAccount.type)) return;
+  populateAccountSelectors();
+  document.getElementById('settlementInvestmentAccountId').value = investmentAccount.id;
+  document.getElementById('settlementAccountDescription').textContent =
+    `${investmentAccount.name} will use this bank for redemptions and broker-cash withdrawals.`;
+  document.getElementById('settlementBankAccount').value =
+    String(investmentAccount.settlementAccountId || '');
+  openModal('settlementAccountModal');
+}
+
+function setTradeFieldVisibility(id, visible) {
+  const node = document.getElementById(id);
+  if (node) node.hidden = !visible;
+}
+
+function updateTradeRedemptionMode() {
+  const form = document.getElementById('tradeForm');
+  if (!form) return;
+  const amountMode = form.dataset.action === 'sell'
+    && form.dataset.category === 'mutual_funds'
+    && document.getElementById('tradeSellMode').value === 'amount';
+  setTradeFieldVisibility('tradeUnitsGroup', !amountMode);
+  setTradeFieldVisibility('tradeAmountGroup', amountMode);
+  document.getElementById('tradeUnits').required = !amountMode;
+  document.getElementById('tradeAmount').required = amountMode;
+  updateTradeProceedsPreview();
+}
+
+function tradeFormAmounts() {
+  const form = document.getElementById('tradeForm');
+  const price = Number(document.getElementById('tradePrice').value || 0);
+  const amountMode = form?.dataset.action === 'sell'
+    && form.dataset.category === 'mutual_funds'
+    && document.getElementById('tradeSellMode').value === 'amount';
+  const enteredAmount = Number(document.getElementById('tradeAmount').value || 0);
+  const units = amountMode && price > 0
+    ? enteredAmount / price
+    : Number(document.getElementById('tradeUnits').value || 0);
+  const gross = amountMode ? enteredAmount : units * price;
+  const charges = Math.max(0, Number(document.getElementById('tradeCharges').value || 0));
+  return { units, price, gross, charges, net: Math.max(0, gross - charges) };
+}
+
+function updateTradeProceedsPreview() {
+  const form = document.getElementById('tradeForm');
+  const preview = document.getElementById('tradeProceedsPreview');
+  if (!form || !preview || form.dataset.action !== 'sell') return;
+  const amounts = tradeFormAmounts();
+  preview.hidden = false;
+  preview.innerHTML = `
+    <span>Gross proceeds <strong>${fmt(amounts.gross)}</strong></span>
+    <span>Charges <strong>-${fmt(amounts.charges)}</strong></span>
+    <span>Net proceeds <strong>${fmt(amounts.net)}</strong></span>`;
+}
+
 function openTradeModal(action, inv) {
   const modal = document.getElementById('tradeModal');
   if (!modal) return;
 
-  document.getElementById('tradeAction').textContent = action === 'buy' ? 'Buy More' : 'Sell';
+  const containerAccount = accounts.find(row => Number(row.id) === Number(inv.containerAccountId));
+  const settlementAccount = linkedSettlementAccount(containerAccount);
+  if (action === 'sell' && inv.category === 'mutual_funds' && !settlementAccount) {
+    alert('Link this mutual-fund account to its settlement bank before recording a redemption.');
+    if (containerAccount) openSettlementAccountModal(containerAccount.id);
+    return;
+  }
+  if (action === 'sell' && ['stocks', 'foreign_stocks'].includes(inv.category) && !containerAccount) {
+    alert('Link this holding to a Demat / Brokerage account before recording a sale.');
+    return;
+  }
+
+  document.getElementById('tradeAction').textContent = action === 'buy'
+    ? 'Buy More'
+    : inv.category === 'mutual_funds' ? 'Redeem Mutual Fund' : 'Sell';
   document.getElementById('tradeAssetName').textContent = `${inv.asset} — ${inv.name}`;
   const metrics = investmentMetrics(inv);
   document.getElementById('tradeCurrentUnits').textContent = metrics.units;
@@ -1404,48 +1863,149 @@ function openTradeModal(action, inv) {
   const form = document.getElementById('tradeForm');
   form.dataset.action = action;
   form.dataset.invId  = inv.id;
+  form.dataset.category = inv.category;
   form.reset();
-  document.getElementById('tradeAccount').value = String(defaultAccountId('investment') || '');
+  document.getElementById('tradeDate').value = todayISO();
+  document.getElementById('tradeSettlementDate').value = todayISO();
+  document.getElementById('tradeSettlementDate').min = todayISO();
+  document.getElementById('tradeCharges').value = '0';
+  document.getElementById('tradePrice').value = Number(inv.currentPrice || 0) || '';
 
   // Set max units for sell
   const unitsInput = document.getElementById('tradeUnits');
   if (action === 'sell') {
-    unitsInput.max = inv.units;
+    unitsInput.max = metrics.units;
   } else {
     unitsInput.removeAttribute('max');
   }
 
+  const isSell = action === 'sell';
+  const isMfSell = isSell && inv.category === 'mutual_funds';
+  const isStockSell = isSell && ['stocks', 'foreign_stocks'].includes(inv.category);
+  setTradeFieldVisibility('tradeSellModeGroup', isMfSell);
+  setTradeFieldVisibility('tradeSettlementDateGroup', isSell);
+  setTradeFieldVisibility('tradeChargesGroup', isSell);
+  setTradeFieldVisibility('tradeAccountGroup', !isSell || (!isMfSell && !isStockSell));
+  setTradeFieldVisibility('tradeSettlementDestination', isMfSell || isStockSell);
+  setTradeFieldVisibility('tradeProceedsPreview', isSell);
+  document.getElementById('tradeDateLabel').textContent = isSell ? 'Sale / Redemption Date' : 'Purchase Date';
+  document.getElementById('tradePriceLabel').textContent = inv.category === 'mutual_funds'
+    ? 'Applicable NAV (₹)' : 'Price per Unit (₹)';
+  document.getElementById('tradeSettlementDateLabel').textContent = isMfSell
+    ? 'Bank Credit Date' : 'Broker Settlement Date';
+  document.getElementById('tradeSettlementDate').required = isSell;
+  document.getElementById('tradeSellMode').value = 'units';
+
+  const accountSelect = document.getElementById('tradeAccount');
+  if (!isSell) {
+    const fundingAccounts = eligibleSettlementAccounts();
+    if (containerAccount?.type === 'demat' && brokerCashBalance(containerAccount) > 0) {
+      fundingAccounts.unshift(containerAccount);
+    }
+    accountSelect.innerHTML = '<option value="">Select funding account</option>' + fundingAccounts.map(account =>
+      `<option value="${account.id}">${escHtml(account.name)}${account.type === 'demat' ? ` · Broker cash ${fmt(brokerCashBalance(account))}` : ''}</option>`
+    ).join('');
+    accountSelect.value = String(defaultAccountId('investment') || '');
+    accountSelect.required = true;
+  } else {
+    accountSelect.required = !isMfSell && !isStockSell;
+  }
+
+  const destination = document.getElementById('tradeSettlementDestination');
+  if (isMfSell) {
+    destination.innerHTML = `<strong>Credits ${escHtml(settlementAccount.name)}</strong><span>Net redemption proceeds will reach this linked bank on the credit date.</span>`;
+  } else if (isStockSell) {
+    destination.innerHTML = `<strong>Credits ${escHtml(containerAccount.name)} broker cash</strong><span>Withdraw this available cash to ${escHtml(settlementAccount?.name || 'a linked bank account')} after settlement.</span>`;
+  }
+  updateTradeRedemptionMode();
+  updateTradeProceedsPreview();
+
   modal.classList.add('open');
 }
 
-document.getElementById('tradeForm')?.addEventListener('submit', e => {
+document.getElementById('tradeSellMode')?.addEventListener('change', updateTradeRedemptionMode);
+['tradeUnits', 'tradeAmount', 'tradePrice', 'tradeCharges'].forEach(id => {
+  document.getElementById(id)?.addEventListener('input', updateTradeProceedsPreview);
+});
+document.getElementById('tradeDate')?.addEventListener('change', event => {
+  const settlementInput = document.getElementById('tradeSettlementDate');
+  settlementInput.min = event.target.value;
+  if (settlementInput.value < event.target.value) settlementInput.value = event.target.value;
+});
+
+document.getElementById('tradeForm')?.addEventListener('submit', async e => {
   e.preventDefault();
   const form   = e.target;
   const action = form.dataset.action;
   const id     = parseInt(form.dataset.invId);
-  const units  = parseFloat(document.getElementById('tradeUnits').value);
-  const price  = parseFloat(document.getElementById('tradePrice').value);
+  const { units, price, gross, charges } = tradeFormAmounts();
 
   const inv = investments.find(x => x.id === id);
   if (!inv) return;
 
   const before = investmentMetrics(inv);
-  if (action === 'sell' && units > before.units) {
+  if (!Number.isFinite(units) || units <= 0 || !Number.isFinite(price) || price <= 0) return;
+  if (action === 'sell' && units > before.units + 1e-9) {
     alert('Cannot sell more units than you hold.');
     return;
   }
+  if (action === 'sell' && charges > gross) {
+    alert('Charges cannot exceed the sale proceeds.');
+    return;
+  }
+  const containerAccount = accounts.find(row => Number(row.id) === Number(inv.containerAccountId));
+  const settlementAccount = linkedSettlementAccount(containerAccount);
+  const accountId = action === 'buy'
+    ? Number(document.getElementById('tradeAccount').value) || null
+    : inv.category === 'mutual_funds'
+      ? settlementAccount?.id || null
+      : ['stocks', 'foreign_stocks'].includes(inv.category)
+        ? containerAccount?.id || null
+        : Number(document.getElementById('tradeAccount').value) || null;
+  if (!accountId) {
+    alert('Select or configure the account connected to this transaction.');
+    return;
+  }
+  if (action === 'buy') {
+    const fundingAccount = accounts.find(row => Number(row.id) === Number(accountId));
+    const available = !fundingAccount ? 0 : fundingAccount.type === 'demat'
+      ? brokerCashBalance(fundingAccount)
+      : trackedAccountBalance(fundingAccount);
+    if (fundingAccount && !isLiabilityAccount(fundingAccount) && available + 0.005 < gross) {
+      alert(`${fundingAccount.name} has only ${fmt(Math.max(0, available))} available for this purchase.`);
+      return;
+    }
+  }
   if (!inv.transactions) inv.transactions = [];
-  inv.transactions.push({
-    date: todayISO(), action: action.toUpperCase(), units, price,
-    accountId: Number(document.getElementById('tradeAccount').value) || null,
-  });
+  const transaction = {
+    date: document.getElementById('tradeDate').value,
+    action: action.toUpperCase(), units, price, accountId,
+    source: 'connected',
+    settlementDate: action === 'sell' ? document.getElementById('tradeSettlementDate').value : '',
+    charges: action === 'sell' ? charges : 0,
+  };
+  inv.transactions.push(transaction);
   const after = investmentMetrics(inv);
+  const previousUnits = inv.units;
+  const previousBuyPrice = inv.buyPrice;
   inv.units = after.units;
   inv.buyPrice = after.units > 0 ? after.costBasis / after.units : 0;
 
-  saveInvestments();
-  renderAfterInvestmentChange();
-  closeModal('tradeModal');
+  const submitButton = e.submitter || form.querySelector('button[type="submit"]');
+  if (submitButton) submitButton.disabled = true;
+  try {
+    await saveInvestments();
+    investments = await apiGet('/investments');
+    renderAfterInvestmentChange();
+    closeModal('tradeModal');
+  } catch (error) {
+    inv.transactions.pop();
+    inv.units = previousUnits;
+    inv.buyPrice = previousBuyPrice;
+    alert(`Transaction was not saved.\n\n${error.message}`);
+  } finally {
+    if (submitButton) submitButton.disabled = false;
+  }
 });
 
 
@@ -1473,7 +2033,7 @@ function renderSavingsCards() {
   el('savInvested', fmt(inv));
   el('savNetSaved', fmt(saved));
 
-  el('savIncomeChange',   income > 0 ? `${MONTHS[currentMonthIdx]} ${currentYear}` : 'Click income card on dashboard to set');
+  el('savIncomeChange',   income > 0 ? `${MONTHS[currentMonthIdx]} ${currentYear}` : 'Add an income transaction from the dashboard');
   cls('savIncomeChange',  income > 0 ? 'card-change positive' : 'card-change');
 
   el('savExpensesChange', `${expRate}% of income`);
@@ -1486,11 +2046,43 @@ function renderSavingsCards() {
   cls('savNetSavedChange', parseFloat(saveRate) >= 0 ? 'card-change positive' : 'card-change negative');
 }
 
+function renderIncomeTransactions() {
+  const tbody = document.getElementById('incomeTransactionsBody');
+  if (!tbody) return;
+  const rows = [...incomeTransactions].sort((a, b) => String(b.date).localeCompare(String(a.date)) || Number(b.id) - Number(a.id));
+  tbody.innerHTML = rows.length ? rows.map(row => `
+    <tr>
+      <td>${fmtDate(row.date)}</td>
+      <td>${incomeSourceLabel(row.source)}</td>
+      <td>${escHtml(row.description || incomeSourceLabel(row.source))}</td>
+      <td>${escHtml(accountName(row.accountId))}</td>
+      <td style="color:var(--success);font-weight:700;">+${fmt(row.amount)}</td>
+      <td><button class="action-btn delete" type="button" data-delete-income="${row.id}" title="Delete income">&#128465;</button></td>
+    </tr>`).join('') : '<tr><td colspan="6" class="empty-state">No income transactions recorded.</td></tr>';
+  tbody.querySelectorAll('[data-delete-income]').forEach(button => {
+    button.addEventListener('click', async () => {
+      if (!confirm('Delete this income credit? The receiving account balance will also decrease.')) return;
+      const id = Number(button.dataset.deleteIncome);
+      const previous = incomeTransactions;
+      incomeTransactions = incomeTransactions.filter(row => Number(row.id) !== id);
+      try {
+        await saveIncomeTransactions();
+        if (serverAvailable) savingsHistory = await apiGet('/savings-history');
+        refreshDashboard();
+        renderIncomeTransactions();
+      } catch (error) {
+        incomeTransactions = previous;
+        alert(`Income could not be deleted: ${error.message}`);
+      }
+    });
+  });
+}
+
 function renderSavingsTable() {
   const tbody = document.getElementById('savingsTableBody');
   if (!tbody) return;
 
-  tbody.innerHTML = savingsHistory.map((row, idx) => {
+  tbody.innerHTML = savingsHistory.map(row => {
     /* Parse month label → mIdx, yr */
     const parts = row.month.split(' ');
     const short = parts[0]; // "Apr"
@@ -1509,7 +2101,7 @@ function renderSavingsTable() {
     return `
       <tr>
         <td style="font-weight:500;">${row.month}</td>
-        <td style="color:var(--success); font-weight:600; cursor:pointer;" class="editable-income" data-idx="${idx}" title="Click to edit">${fmt(income)} ✏️</td>
+        <td style="color:var(--success); font-weight:600;">${fmt(income)}</td>
         <td style="color:var(--danger);">-${fmt(monthExpenses)}</td>
         <td style="color:var(--warning); font-weight:600;">-${fmt(monthInvested)}</td>
         <td style="color:var(--primary);">-${fmt(monthEF)}</td>
@@ -1523,29 +2115,6 @@ function renderSavingsTable() {
       </tr>`;
   }).join('');
 
-  /* Editable income cells */
-  tbody.querySelectorAll('.editable-income').forEach(td => {
-    td.addEventListener('click', () => {
-      const idx = parseInt(td.dataset.idx);
-      const row = savingsHistory[idx];
-      if (!row) return;
-      const input = prompt(`Set income for ${row.month}:`, row.income || 0);
-      if (input === null) return;
-      const val = parseFloat(input);
-      if (isNaN(val) || val < 0) return;
-      row.income = val;
-      row.accountId = row.accountId || defaultAccountId('salary');
-      if (serverAvailable) {
-        fetch(`${API_BASE}/savings-history/${encodeURIComponent(row.month)}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ income: val, accountId: row.accountId }),
-        }).catch(e => console.error('Patch income failed:', e));
-      }
-      renderSavingsTable();
-      refreshDashboard();
-    });
-  });
 }
 
 
@@ -1749,9 +2318,6 @@ function renderEmergencyFund() {
 /* ============================================================
    RENDER: STOCKS & MUTUAL FUNDS — DEDICATED SECTION
    ============================================================ */
-let stocksRiskChart = null;
-let stocksCapChart  = null;
-let stocksCategoryChart = null;
 let stocksGrowthCompareChart = null;
 let stocksInvVsCurChart = null;
 let mfGrowthCompareChart = null;
@@ -1765,22 +2331,6 @@ function renderStocksSection() {
   const totalGain     = totalCurrent - totalInvested;
   const returnPct     = totalInvested > 0 ? (totalGain / totalInvested * 100).toFixed(1) : '0.0';
   const isPos         = totalGain >= 0;
-
-  /* --- Risk distribution by value --- */
-  const riskBuckets = { low: 0, moderate: 0, high: 0 };
-  items.forEach(i => {
-    const val = i.units * i.currentPrice;
-    const risk = i.riskLevel || 'moderate';
-    riskBuckets[risk] = (riskBuckets[risk] || 0) + val;
-  });
-
-  /* --- Market cap distribution by value --- */
-  const capBuckets = { large: 0, mid: 0, small: 0 };
-  items.forEach(i => {
-    const val = i.units * i.currentPrice;
-    const cap = i.marketCap || 'large';
-    capBuckets[cap] = (capBuckets[cap] || 0) + val;
-  });
 
   /* --- Category split: stocks vs mutual_funds vs foreign_stocks --- */
   const catBuckets = { stocks: 0, mutual_funds: 0, foreign_stocks: 0 };
@@ -1830,36 +2380,10 @@ function renderStocksSection() {
     </div>
   `;
 
-  /* --- Three analytics charts row --- */
-  const chartsHTML = `
-    <div class="stk-charts-row">
-      <div class="chart-card stk-chart-card">
-        <div class="chart-header">
-          <h3>Risk Profile</h3>
-          <span class="chart-subtitle">By current value</span>
-        </div>
-        <div class="chart-container"><canvas id="stocksRiskChart"></canvas></div>
-      </div>
-      <div class="chart-card stk-chart-card">
-        <div class="chart-header">
-          <h3>Market Cap Split</h3>
-          <span class="chart-subtitle">Large · Mid · Small</span>
-        </div>
-        <div class="chart-container"><canvas id="stocksCapChart"></canvas></div>
-      </div>
-      <div class="chart-card stk-chart-card">
-        <div class="chart-header">
-          <h3>Category Breakdown</h3>
-          <span class="chart-subtitle">Stocks · MF · Foreign</span>
-        </div>
-        <div class="chart-container"><canvas id="stocksCategoryChart"></canvas></div>
-      </div>
-    </div>
-  `;
-
   /* --- Stocks: Growth Comparison + Invested vs Current charts --- */
   const stockItems = items.filter(i => i.category === 'stocks' || i.category === 'foreign_stocks');
   const mfItems    = items.filter(i => i.category === 'mutual_funds');
+  const mfTotals = portfolioTotals(mfItems);
 
   const stocksCompareChartsHTML = stockItems.length > 0 ? `
     <div class="stk-compare-section">
@@ -1890,16 +2414,15 @@ function renderStocksSection() {
       <div class="stk-charts-row stk-charts-row-2col">
         <div class="chart-card stk-chart-card wide-chart-card">
           <div class="chart-header">
-            <h3>Growth Comparison — All Mutual Funds</h3>
-            <span class="chart-subtitle">Value over last 12 months</span>
+            <h3>Current Value by Mutual Fund</h3>
+            <span class="chart-subtitle">Latest NAV × units · Total ${fmt(mfTotals.currentValue)}</span>
           </div>
           <div class="chart-container tall"><canvas id="mfGrowthCompareChart"></canvas></div>
-          <div class="chart-custom-legend" id="mfGrowthLegend"></div>
         </div>
         <div class="chart-card stk-chart-card wide-chart-card">
           <div class="chart-header">
             <h3>Invested vs Current — Mutual Funds</h3>
-            <span class="chart-subtitle">Total invested vs value over 12 months</span>
+            <span class="chart-subtitle">Invested ${fmt(mfTotals.costBasis)} · Current ${fmt(mfTotals.currentValue)}</span>
           </div>
           <div class="chart-container tall"><canvas id="mfInvVsCurChart"></canvas></div>
         </div>
@@ -1921,7 +2444,7 @@ function renderStocksSection() {
     </div>
   `;
 
-  el.innerHTML = summaryHTML + chartsHTML + stocksCompareChartsHTML + mfCompareChartsHTML +
+  el.innerHTML = summaryHTML + stocksCompareChartsHTML + mfCompareChartsHTML +
     '<div class="table-card full-width" style="margin-top:8px;">' +
       '<div class="table-header">' +
         '<h3>All Holdings</h3>' +
@@ -1979,79 +2502,9 @@ function renderStocksSection() {
   /* Re-populate debug log if it has entries */
   renderDebugLog();
 
-  /* --- Render the three charts --- */
-  renderStocksCharts(riskBuckets, capBuckets, catBuckets);
-
   /* --- Render comparison charts for stocks and mutual funds --- */
   renderStocksCompareCharts(stockItems);
   renderMFCompareCharts(mfItems);
-}
-
-function renderStocksCharts(riskBuckets, capBuckets, catBuckets) {
-  // Destroy old instances
-  if (stocksRiskChart)     { stocksRiskChart.destroy();     stocksRiskChart = null; }
-  if (stocksCapChart)      { stocksCapChart.destroy();      stocksCapChart = null; }
-  if (stocksCategoryChart) { stocksCategoryChart.destroy();  stocksCategoryChart = null; }
-
-  const donutOpts = {
-    responsive: true, maintainAspectRatio: false,
-    cutout: '65%',
-    plugins: {
-      legend: { position: 'bottom', labels: { padding: 14, usePointStyle: true, font: { size: 12 } } },
-      tooltip: { callbacks: { label: ctx => ' ' + ctx.label + ': ' + fmt(ctx.raw) } }
-    }
-  };
-
-  /* Risk Profile */
-  const riskCtx = document.getElementById('stocksRiskChart')?.getContext('2d');
-  if (riskCtx) {
-    stocksRiskChart = new Chart(riskCtx, {
-      type: 'doughnut',
-      data: {
-        labels: ['Low Risk', 'Moderate', 'High Risk'],
-        datasets: [{
-          data: [riskBuckets.low, riskBuckets.moderate, riskBuckets.high],
-          backgroundColor: ['#10b981', '#f59e0b', '#ef4444'],
-          borderWidth: 2, borderColor: '#fff'
-        }]
-      },
-      options: donutOpts
-    });
-  }
-
-  /* Market Cap */
-  const capCtx = document.getElementById('stocksCapChart')?.getContext('2d');
-  if (capCtx) {
-    stocksCapChart = new Chart(capCtx, {
-      type: 'doughnut',
-      data: {
-        labels: ['Large Cap', 'Mid Cap', 'Small Cap'],
-        datasets: [{
-          data: [capBuckets.large, capBuckets.mid, capBuckets.small],
-          backgroundColor: ['#6366f1', '#3b82f6', '#06b6d4'],
-          borderWidth: 2, borderColor: '#fff'
-        }]
-      },
-      options: donutOpts
-    });
-  }
-
-  /* Category Breakdown */
-  const catCtx = document.getElementById('stocksCategoryChart')?.getContext('2d');
-  if (catCtx) {
-    stocksCategoryChart = new Chart(catCtx, {
-      type: 'doughnut',
-      data: {
-        labels: ['Stocks', 'Mutual Funds', 'Foreign Stocks'],
-        datasets: [{
-          data: [catBuckets.stocks, catBuckets.mutual_funds, catBuckets.foreign_stocks],
-          backgroundColor: ['#6366f1', '#10b981', '#f59e0b'],
-          borderWidth: 2, borderColor: '#fff'
-        }]
-      },
-      options: donutOpts
-    });
-  }
 }
 
 /* ============================================================
@@ -2071,14 +2524,11 @@ function buildMonthlyTimeline(items) {
       : [{ date: inv.date, action: 'BUY', units: inv.units, price: inv.buyPrice }];
 
     return months.map((mo, idx) => {
-      const moEnd = mo.key + '-31';
-      let unitsHeld = 0;
-      let totalCost = 0;
-      for (const t of txns) {
-        if (t.date.slice(0, 7) > mo.key) break;
-        if (t.action === 'BUY')  { unitsHeld += t.units; totalCost += t.units * t.price; }
-        if (t.action === 'SELL') { unitsHeld -= t.units; totalCost -= t.units * t.price; }
-      }
+      const [monthYear, monthNumber] = mo.key.split('-').map(Number);
+      const monthEnd = new Date(monthYear, monthNumber, 0, 23, 59, 59);
+      const monthMetrics = investmentMetrics(inv, monthEnd);
+      const unitsHeld = monthMetrics.units;
+      const totalCost = monthMetrics.costBasis;
       if (unitsHeld <= 0) return { invested: 0, value: 0 };
 
       const isCurrentMonth = idx === months.length - 1;
@@ -2209,78 +2659,90 @@ function renderStocksCompareCharts(stockItems) {
 }
 
 /* ============================================================
-   RENDER: MUTUAL FUNDS — 12-MONTH GROWTH LINE CHARTS
+   RENDER: MUTUAL FUNDS — ACTUAL VALUE SNAPSHOT CHARTS
    ============================================================ */
 function renderMFCompareCharts(mfItems) {
   if (mfGrowthCompareChart) { mfGrowthCompareChart.destroy(); mfGrowthCompareChart = null; }
   if (mfInvVsCurChart)      { mfInvVsCurChart.destroy();      mfInvVsCurChart = null; }
   if (mfItems.length === 0) return;
 
-  const { months, datasets } = buildMonthlyTimeline(mfItems);
-  const monthLabels = months.map(m => m.label);
-
+  const rows = mfItems.map(inv => {
+    const metrics = investmentMetrics(inv);
+    return {
+      inv,
+      label: compactMutualFundName(inv),
+      fullName: inv.name || inv.asset,
+      invested: metrics.costBasis,
+      current: metrics.currentValue,
+    };
+  }).sort((a, b) => b.current - a.current);
+  const fundLabels = rows.map(row => row.label);
   const amtTickCallback = v => '₹' + (v >= 100000 ? (v/100000).toFixed(1) + 'L' : v >= 1000 ? (v/1000).toFixed(0) + 'K' : v);
 
-  /* Chart 1: Growth lines — each MF's value over 12 months */
+  /* Chart 1: actual current value of each fund at its latest saved NAV */
   const growthCtx = document.getElementById('mfGrowthCompareChart')?.getContext('2d');
   if (growthCtx) {
     mfGrowthCompareChart = new Chart(growthCtx, {
-      type: 'line',
+      type: 'bar',
       data: {
-        labels: monthLabels,
-        datasets: mfItems.map((inv, i) => ({
-          label: inv.asset.length > 18 ? inv.asset.substring(0, 18) + '…' : inv.asset,
-          data: datasets[i].map(d => d.value),
-          borderColor: lineChartColors[i % lineChartColors.length],
-          backgroundColor: lineChartColors[i % lineChartColors.length] + '18',
-          tension: 0.35,
-          pointRadius: 3,
-          pointHoverRadius: 6,
-          borderWidth: 2.5,
-          fill: false
-        }))
+        labels: fundLabels,
+        datasets: [{
+          label: 'Current Value',
+          data: rows.map(row => row.current),
+          backgroundColor: rows.map((_, i) => lineChartColors[i % lineChartColors.length] + 'CC'),
+          borderColor: rows.map((_, i) => lineChartColors[i % lineChartColors.length]),
+          borderWidth: 1.5,
+          borderRadius: 5,
+        }]
       },
       options: {
+        indexAxis: 'y',
         responsive: true, maintainAspectRatio: false,
-        interaction: { mode: 'index', intersect: false },
         plugins: {
           legend: { display: false },
-          tooltip: { callbacks: { label: ctx => ` ${ctx.dataset.label}: ${fmt(ctx.parsed.y)}` } }
+          tooltip: {
+            callbacks: {
+              title: items => rows[items[0]?.dataIndex]?.fullName || '',
+              label: ctx => ` Current Value: ${fmt(ctx.parsed.x)}`,
+            }
+          }
         },
         scales: {
-          y: { title: { display: true, text: 'Value (₹)' }, grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { callback: amtTickCallback } },
-          x: { grid: { display: false } }
+          x: { title: { display: true, text: 'Current Value (₹)' }, grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { callback: amtTickCallback }, beginAtZero: true },
+          y: { grid: { display: false }, ticks: { autoSkip: false, font: { size: 11 } } }
         }
       }
     });
-    buildHtmlLegend(mfGrowthCompareChart, 'mfGrowthLegend');
   }
 
-  /* Chart 2: Invested vs Current value over 12 months (aggregated) */
+  /* Chart 2: actual cost basis and current value for every fund */
   const ivcCtx = document.getElementById('mfInvVsCurChart')?.getContext('2d');
   if (ivcCtx) {
-    const aggInvested = months.map((_, mi) => datasets.reduce((s, ds) => s + ds[mi].invested, 0));
-    const aggValue    = months.map((_, mi) => datasets.reduce((s, ds) => s + ds[mi].value, 0));
-
     mfInvVsCurChart = new Chart(ivcCtx, {
-      type: 'line',
+      type: 'bar',
       data: {
-        labels: monthLabels,
+        labels: fundLabels,
         datasets: [
-          { label: 'Total Invested', data: aggInvested, borderColor: '#8b5cf6', backgroundColor: '#8b5cf620', tension: 0.3, pointRadius: 3, borderWidth: 2.5, fill: true, borderDash: [6, 3] },
-          { label: 'Current Value',  data: aggValue,    borderColor: '#06b6d4', backgroundColor: '#06b6d420', tension: 0.3, pointRadius: 3, borderWidth: 2.5, fill: true }
+          { label: 'Invested', data: rows.map(row => row.invested), borderColor: '#8b5cf6', backgroundColor: '#8b5cf6B8', borderWidth: 1.5, borderRadius: 4 },
+          { label: 'Current Value', data: rows.map(row => row.current), borderColor: '#06b6d4', backgroundColor: '#06b6d4B8', borderWidth: 1.5, borderRadius: 4 }
         ]
       },
       options: {
+        indexAxis: 'y',
         responsive: true, maintainAspectRatio: false,
         interaction: { mode: 'index', intersect: false },
         plugins: {
           legend: { position: 'top', labels: { usePointStyle: true, padding: 12, font: { size: 12 } } },
-          tooltip: { callbacks: { label: ctx => ` ${ctx.dataset.label}: ${fmt(ctx.parsed.y)}` } }
+          tooltip: {
+            callbacks: {
+              title: items => rows[items[0]?.dataIndex]?.fullName || '',
+              label: ctx => ` ${ctx.dataset.label}: ${fmt(ctx.parsed.x)}`,
+            }
+          }
         },
         scales: {
-          y: { title: { display: true, text: 'Amount (₹)' }, grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { callback: amtTickCallback } },
-          x: { grid: { display: false } }
+          x: { title: { display: true, text: 'Amount (₹)' }, grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { callback: amtTickCallback }, beginAtZero: true },
+          y: { grid: { display: false }, ticks: { autoSkip: false, font: { size: 11 } } }
         }
       }
     });
@@ -2422,7 +2884,8 @@ function investmentOutflowForYM(mIdx, yr) {
   let total = 0;
   investments.forEach(inv => {
     (inv.transactions || []).forEach(tx => {
-      if (tx.date && tx.date.startsWith(ym) && ['BUY', 'DEPOSIT'].includes(tx.action)) {
+      if (tx.date && tx.date.startsWith(ym) && ['BUY', 'DEPOSIT'].includes(tx.action)
+          && String(tx.source || 'connected').toLowerCase() !== 'opening') {
         total += tx.units * tx.price;
       }
     });
@@ -2430,100 +2893,94 @@ function investmentOutflowForYM(mIdx, yr) {
   return total;
 }
 
-function renderDashboardCards() {
-  /* Account-led net position, plus any legacy holdings not linked to an account. */
-  let totalWealth = 0;
+function incomeForYM(mIdx, yr) {
+  const ym = `${yr}-${String(mIdx + 1).padStart(2, '0')}`;
+  return incomeTransactions.filter(row => row.date && row.date.startsWith(ym))
+    .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+}
+
+function dashboardPeriodRange() {
+  const mode = document.getElementById('dashboardPeriod')?.value || 'fytd';
+  const today = todayISO();
+  if (mode === 'month') {
+    const month = String(currentMonthIdx + 1).padStart(2, '0');
+    const lastDay = new Date(currentYear, currentMonthIdx + 1, 0).getDate();
+    return { start: `${currentYear}-${month}-01`, end: `${currentYear}-${month}-${lastDay}`, label: `${MONTHS[currentMonthIdx]} ${currentYear}` };
+  }
+  if (mode === 'year') return { start: `${currentYear}-01-01`, end: `${currentYear}-12-31`, label: `Calendar year ${currentYear}` };
+  if (mode === 'all') return { start: '0000-01-01', end: '9999-12-31', label: 'All recorded activity' };
+  if (mode === 'custom') {
+    const start = document.getElementById('dashboardDateFrom')?.value || `${currentYear}-01-01`;
+    const end = document.getElementById('dashboardDateTo')?.value || today;
+    return { start: start <= end ? start : end, end: start <= end ? end : start, label: `${fmtDate(start <= end ? start : end)} - ${fmtDate(start <= end ? end : start)}` };
+  }
+  const now = new Date();
+  const fyYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+  return { start: `${fyYear}-04-01`, end: today, label: `FY ${fyYear}-${String(fyYear + 1).slice(2)} to date` };
+}
+
+const dateInRange = (value, range) => Boolean(value && value >= range.start && value <= range.end);
+
+function investmentOutflowForRange(range) {
+  let total = 0;
+  investments.forEach(inv => (inv.transactions || []).forEach(tx => {
+    if (dateInRange(tx.date, range) && ['BUY', 'DEPOSIT'].includes(tx.action)
+        && String(tx.source || 'connected').toLowerCase() !== 'opening') {
+      total += Number(tx.units || 0) * Number(tx.price || 0);
+    }
+  }));
+  return total;
+}
+
+function dashboardPeriodData() {
+  const range = dashboardPeriodRange();
+  const periodIncome = incomeTransactions.filter(row => dateInRange(row.date, range));
+  const periodExpenses = expenses.filter(row => dateInRange(row.date, range));
+  const income = periodIncome.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const spent = periodExpenses.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const invested = investmentOutflowForRange(range);
+  const emergency = (emergencyFund.contributions || []).filter(row => dateInRange(row.date, range))
+    .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  return { range, periodIncome, periodExpenses, income, spent, invested, emergency, surplus: income - spent - invested - emergency };
+}
+
+function currentNetWorth() {
+  let total = 0;
   activeAccounts().forEach(account => {
     const balance = trackedAccountBalance(account);
-    totalWealth += isLiabilityAccount(account) ? -balance : balance;
+    total += isLiabilityAccount(account) ? -balance : balance;
   });
   investments.filter(inv => !inv.containerAccountId).forEach(inv => {
-    totalWealth += investmentMetrics(inv).currentValue;
+    total += investmentMetrics(inv).currentValue;
   });
+  return total;
+}
 
-  /* Selected month data */
-  const curRow  = savingsRowForMonth(currentMonthIdx, currentYear);
-  const prevMIdx = currentMonthIdx === 0 ? 11 : currentMonthIdx - 1;
-  const prevYr   = currentMonthIdx === 0 ? currentYear - 1 : currentYear;
-  const prevRow  = savingsRowForMonth(prevMIdx, prevYr);
+function renderDashboardCards() {
+  const data = dashboardPeriodData();
+  const netWorth = currentNetWorth();
+  const savingsRate = data.income > 0 ? data.surplus / data.income * 100 : 0;
+  const expenseRate = data.income > 0 ? data.spent / data.income * 100 : 0;
+  const investmentRate = data.income > 0 ? data.invested / data.income * 100 : 0;
+  const setText = (id, value) => { const node = document.getElementById(id); if (node) node.textContent = value; };
+  const setClass = (id, state) => { const node = document.getElementById(id); if (node) node.className = `card-change ${state}`; };
 
-  const monthlyIncome   = curRow?.income || 0;
-  const monthlyExpenses = expensesForMonth().reduce((s, e) => s + e.amount, 0);
-  const monthlyInvested = investmentOutflowForYM(currentMonthIdx, currentYear);
-  const monthlyEF       = efContribForYM(currentMonthIdx, currentYear);
-  const netSavings      = monthlyIncome - monthlyExpenses - monthlyInvested - monthlyEF;
-  const savingsRate     = monthlyIncome > 0 ? (netSavings / monthlyIncome * 100).toFixed(1) : '0.0';
-
-  /* Prev month comparison — compute from expenses array */
-  const prevMonthExp = expensesForYM(prevMIdx, prevYr).reduce((s, e) => s + e.amount, 0);
-  const expChange    = prevMonthExp > 0 ? ((monthlyExpenses - prevMonthExp) / prevMonthExp * 100).toFixed(1) : '0.0';
-  const incChange    = prevRow?.income ? monthlyIncome - prevRow.income : 0;
-  const invPct       = monthlyIncome > 0 ? (monthlyInvested / monthlyIncome * 100).toFixed(1) : '0.0';
-
-  const el = (id, txt) => { const e = document.getElementById(id); if (e) e.textContent = txt; };
-  const cls = (id, c) => { const e = document.getElementById(id); if (e) e.className = 'card-change ' + c; };
-
-  el('dashWealth',   fmt(totalWealth));
-  el('dashIncome',   fmt(monthlyIncome));
-  el('dashExpenses', fmt(monthlyExpenses));
-  el('dashSavings',  fmt(netSavings));
-
-  el('dashWealthChange', activeAccounts().length
-    ? `Calculated from ${activeAccounts().length} active account${activeAccounts().length === 1 ? '' : 's'}`
-    : 'Add accounts to calculate net position');
-  cls('dashWealthChange',  'card-change positive');
-
-  el('dashIncomeChange',   incChange >= 0 ? `+${fmt(incChange)} vs last month` : `${fmt(incChange)} vs last month`);
-  cls('dashIncomeChange',  incChange >= 0 ? 'card-change positive' : 'card-change negative');
-
-  el('dashExpensesChange', `${expChange >= 0 ? '+' : ''}${expChange}% vs last month`);
-  cls('dashExpensesChange', parseFloat(expChange) <= 0 ? 'card-change positive' : 'card-change negative');
-
-  el('dashSavingsChange',  `${savingsRate}% save · ${invPct}% invested`);
-  cls('dashSavingsChange', parseFloat(savingsRate) >= 0 ? 'card-change positive' : 'card-change negative');
-
-  /* Click-to-edit income */
-  const incEl = document.getElementById('dashIncome');
-  if (incEl && !incEl.dataset.bound) {
-    incEl.dataset.bound = '1';
-    incEl.style.cursor = 'pointer';
-    incEl.title = 'Click to edit monthly income';
-    incEl.addEventListener('click', () => {
-      if (!defaultAccountId('salary')) {
-        alert('Add an active account with the Salary purpose before recording income.');
-        navigateTo('planning');
-        return;
-      }
-      const current = curRow?.income || 0;
-      const input = prompt(`Set income for ${MONTHS[currentMonthIdx]} ${currentYear}:`, current);
-      if (input === null) return;
-      const val = parseFloat(input);
-      if (isNaN(val) || val < 0) return;
-      /* Update local data */
-      const row = savingsRowForMonth(currentMonthIdx, currentYear);
-      const monthLabel = `${MONTHS[currentMonthIdx].slice(0, 3)} ${currentYear}`;
-      if (row) {
-        row.income = val;
-        row.accountId = row.accountId || defaultAccountId('salary');
-      } else {
-        savingsHistory.push({
-          month: monthLabel, income: val, accountId: defaultAccountId('salary'),
-        });
-      }
-      /* Save to server */
-      if (serverAvailable) {
-        fetch(`${API_BASE}/savings-history/${encodeURIComponent(monthLabel)}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            income: val,
-            accountId: savingsRowForMonth(currentMonthIdx, currentYear)?.accountId || null,
-          }),
-        }).catch(e => console.error('Patch income failed:', e));
-      }
-      refreshDashboard();
-    });
-  }
+  setText('dashboardPeriodLabel', data.range.label);
+  setText('dashWealth', fmt(netWorth));
+  setText('dashIncome', fmt(data.income));
+  setText('dashExpenses', fmt(data.spent));
+  setText('dashInvested', fmt(data.invested));
+  setText('dashSavings', fmt(data.surplus));
+  setText('dashWealthChange', `As of today - ${activeAccounts().length} active accounts`);
+  setText('dashIncomeChange', `${data.periodIncome.length} credit${data.periodIncome.length === 1 ? '' : 's'} in period`);
+  setText('dashExpensesChange', `${expenseRate.toFixed(1)}% of income`);
+  setText('dashInvestedChange', `${investmentRate.toFixed(1)}% of income - opening positions excluded`);
+  setText('dashSavingsChange', `${savingsRate.toFixed(1)}% of income remains`);
+  setClass('dashWealthChange', netWorth >= 0 ? 'positive' : 'negative');
+  setClass('dashIncomeChange', data.income > 0 ? 'positive' : '');
+  setClass('dashExpensesChange', '');
+  setClass('dashInvestedChange', '');
+  setClass('dashSavingsChange', data.surplus >= 0 ? 'positive' : 'negative');
 }
 
 
@@ -2534,47 +2991,47 @@ function renderDashboardCards() {
 const PALETTE = ['#6366f1','#10b981','#f59e0b','#ef4444','#3b82f6','#ec4899','#06b6d4','#94a3b8'];
 
 /* Track dashboard chart instances so we can destroy & recreate */
-let chartExpense = null, chartSavTrend = null, chartPortfolio = null, chartPerformance = null, chartSavHist = null, chartWealth = null, chartExpTrend = null, chartExpCatPie = null;
+let chartExpense = null, chartIncomeSources = null, chartDashboardExpenseCategories = null,
+  chartSavTrend = null, chartPortfolio = null, chartPerformance = null,
+  chartSavHist = null, chartWealth = null, chartExpTrend = null, chartExpCatPie = null;
 
 /** Build enriched month data: { month, income, expenses, invested, saved } for a given mIdx/yr */
 function buildMonthData(mIdx, yr) {
   const row = savingsRowForMonth(mIdx, yr);
-  if (!row) return null;
   const monthExpenses = expensesForYM(mIdx, yr).reduce((s, e) => s + e.amount, 0);
   const monthInvested = investmentOutflowForYM(mIdx, yr);
   const monthEF       = efContribForYM(mIdx, yr);
+  const monthIncome   = incomeForYM(mIdx, yr);
   return {
-    month: row.month,
-    income: row.income || 0,
+    month: row?.month || `${MONTHS[mIdx].slice(0, 3)} ${yr}`,
+    income: monthIncome,
     expenses: monthExpenses,
     invested: monthInvested,
     efContrib: monthEF,
-    saved: (row.income || 0) - monthExpenses - monthInvested - monthEF,
+    saved: monthIncome - monthExpenses - monthInvested - monthEF,
   };
 }
 
 function initCharts() {
 
   /* Destroy previous instances */
-  [chartExpense, chartSavTrend, chartPortfolio, chartPerformance, chartSavHist, chartWealth, chartExpTrend].forEach(c => { if (c) c.destroy(); });
-  chartExpense = chartSavTrend = chartPortfolio = chartPerformance = chartSavHist = chartWealth = chartExpTrend = null;
+  [chartExpense, chartIncomeSources, chartDashboardExpenseCategories, chartSavTrend,
+    chartPortfolio, chartPerformance, chartSavHist, chartWealth, chartExpTrend].forEach(c => { if (c) c.destroy(); });
+  chartExpense = chartIncomeSources = chartDashboardExpenseCategories = chartSavTrend =
+    chartPortfolio = chartPerformance = chartSavHist = chartWealth = chartExpTrend = null;
 
-  /* ---- 1. Expense + Investment Breakdown (donut) — selected month ---- */
+  /* ---- 1. Money allocation for the selected dashboard period ---- */
   const expCtx = document.getElementById('expenseChart')?.getContext('2d');
   if (expCtx) {
-    const periodLabel = `${MONTHS[currentMonthIdx]} ${currentYear}`;
+    const periodData = dashboardPeriodData();
+    const periodLabel = periodData.range.label;
     const subtitleEl = document.getElementById('expenseChartSubtitle');
     if (subtitleEl) subtitleEl.textContent = periodLabel;
-    const monthExp = expensesForMonth();
     const catTotals = {};
-    monthExp.forEach(e => { catTotals[e.category] = (catTotals[e.category] || 0) + e.amount; });
-    /* Add investment outflow + EF contribution + unallocated slices for full income breakdown */
-    const monthInvested = investmentOutflowForYM(currentMonthIdx, currentYear);
-    if (monthInvested > 0) catTotals['_investments'] = monthInvested;
-    const monthEFContrib = efContribForYM(currentMonthIdx, currentYear);
-    if (monthEFContrib > 0) catTotals['_emergency'] = monthEFContrib;
-    const curRow = savingsRowForMonth(currentMonthIdx, currentYear);
-    const income = curRow?.income || 0;
+    periodData.periodExpenses.forEach(e => { catTotals[e.category] = (catTotals[e.category] || 0) + Number(e.amount || 0); });
+    if (periodData.invested > 0) catTotals['_investments'] = periodData.invested;
+    if (periodData.emergency > 0) catTotals['_emergency'] = periodData.emergency;
+    const income = periodData.income;
     const totalAllocated = Object.values(catTotals).reduce((a, b) => a + b, 0);
     const unallocated = Math.max(0, income - totalAllocated);
     if (unallocated > 0) catTotals['_unallocated'] = unallocated;
@@ -2607,7 +3064,7 @@ function initCharts() {
               label: ctx => {
                 const pctOfTotal  = Math.round(ctx.raw / total * 100);
                 const pctOfIncome = income > 0 ? (ctx.raw / income * 100).toFixed(1) : '—';
-                return ` ${ctx.label}: ${fmt(ctx.raw)}  (${pctOfTotal}% of spend · ${pctOfIncome}% of income)`;
+                return ` ${ctx.label}: ${fmt(ctx.raw)}  (${pctOfTotal}% of allocation · ${pctOfIncome}% of income)`;
               },
             },
           },
@@ -2620,7 +3077,7 @@ function initCharts() {
     const legendEl = document.getElementById('expenseLegend');
     if (legendEl) {
       if (!hasBreakdownData) {
-        legendEl.innerHTML = `<div class="chart-empty-message">No income or transactions recorded for ${periodLabel}. Click the Income card to add income.</div>`;
+        legendEl.innerHTML = `<div class="chart-empty-message">No income or transactions recorded for ${periodLabel}.</div>`;
       } else legendEl.innerHTML = keys.map((k, i) => {
         const lbl = labelMap[k] || k;
         const pct = income > 0 ? (catTotals[k] / income * 100).toFixed(1) : '—';
@@ -2632,7 +3089,44 @@ function initCharts() {
     }
   }
 
-  /* ---- 2. Savings Rate % Trend (line) — last 12 months ending at selected ---- */
+  /* ---- 2. Income received by source ---- */
+  const incomeSourceCtx = document.getElementById('incomeSourceChart')?.getContext('2d');
+  if (incomeSourceCtx) {
+    const periodData = dashboardPeriodData();
+    const sourceTotals = {};
+    periodData.periodIncome.forEach(row => {
+      const source = String(row.source || 'other').toLowerCase();
+      sourceTotals[source] = (sourceTotals[source] || 0) + Number(row.amount || 0);
+    });
+    const keys = Object.keys(sourceTotals);
+    const hasData = keys.length > 0;
+    const colors = keys.map((_, index) => PALETTE[index % PALETTE.length]);
+    chartIncomeSources = new Chart(incomeSourceCtx, {
+      type: 'doughnut',
+      data: {
+        labels: hasData ? keys.map(incomeSourceLabel) : ['No income'],
+        datasets: [{
+          data: hasData ? keys.map(key => sourceTotals[key]) : [1],
+          backgroundColor: hasData ? colors : ['#e2e8f0'],
+          borderColor: '#fff', borderWidth: 2,
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, cutout: '64%',
+        plugins: {
+          legend: { display: false },
+          tooltip: { enabled: hasData, callbacks: { label: ctx => ` ${ctx.label}: ${fmt(ctx.raw)}` } },
+        },
+      },
+    });
+    const legend = document.getElementById('incomeSourceLegend');
+    if (legend) legend.innerHTML = hasData ? keys.map((key, index) => `
+      <div class="legend-item"><div class="legend-dot" style="background:${colors[index]}"></div>
+      <span>${incomeSourceLabel(key)} <small style="color:#94a3b8">${fmt(sourceTotals[key])}</small></span></div>`).join('')
+      : '<div class="chart-empty-message">Add an income credit to see source totals.</div>';
+  }
+
+  /* ---- 3. Monthly money flow — last 12 months ending at selected month ---- */
   const savCtx = document.getElementById('savingsChart')?.getContext('2d');
   if (savCtx) {
     const last12 = [];
@@ -2640,32 +3134,28 @@ function initCharts() {
       let mI = currentMonthIdx - offset;
       let yr = currentYear;
       while (mI < 0) { mI += 12; yr--; }
-      const md = buildMonthData(mI, yr);
-      if (md) last12.push(md);
+      last12.push(buildMonthData(mI, yr));
     }
-    const rates = last12.map(r => r.income > 0 ? +(r.saved / r.income * 100).toFixed(1) : 0);
     chartSavTrend = new Chart(savCtx, {
-      type: 'line',
+      type: 'bar',
       data: {
-        labels: last12.map(r => r.month.split(' ')[0]),
-        datasets: [{
-          label: 'Savings Rate %',
-          data: rates,
-          borderColor: '#6366f1',
-          backgroundColor: 'rgba(99,102,241,0.10)',
-          fill: true, tension: 0.4,
-          pointBackgroundColor: rates.map(r => r >= 0 ? '#6366f1' : '#ef4444'),
-          pointRadius: 4,
-        }],
+        labels: last12.map(r => r.month),
+        datasets: [
+          { label: 'Income', data: last12.map(r => r.income), backgroundColor: '#10b981', borderRadius: 4 },
+          { label: 'Expenses', data: last12.map(r => r.expenses), backgroundColor: '#ef4444', borderRadius: 4 },
+          { label: 'Invested', data: last12.map(r => r.invested), backgroundColor: '#f59e0b', borderRadius: 4 },
+          { label: 'Surplus', data: last12.map(r => r.saved), type: 'line', borderColor: '#6366f1', backgroundColor: '#6366f1', tension: 0.3, pointRadius: 3, borderWidth: 2 },
+        ],
       },
       options: {
         responsive: true, maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
         plugins: {
-          legend: { display: false },
-          tooltip: { callbacks: { label: ctx => `${ctx.raw}%` } },
+          legend: { position: 'top', labels: { usePointStyle: true, boxWidth: 12 } },
+          tooltip: { callbacks: { label: ctx => ` ${ctx.dataset.label}: ${fmt(ctx.raw)}` } },
         },
         scales: {
-          y: { grid: { color: '#f1f5f9' }, ticks: { callback: v => v + '%' } },
+          y: { grid: { color: '#f1f5f9' }, ticks: { callback: v => '₹' + (v / 1000).toFixed(0) + 'k' } },
           x: { grid: { display: false } },
         },
       },
@@ -2844,34 +3334,81 @@ function initCharts() {
     });
   }
 
-  /* ---- 6. Net-worth history from actual saved snapshots ---- */
+  /* ---- Dashboard expense categories for the selected period ---- */
+  const dashboardExpenseCtx = document.getElementById('dashboardExpenseCategoryChart')?.getContext('2d');
+  if (dashboardExpenseCtx) {
+    const totals = {};
+    dashboardPeriodData().periodExpenses.forEach(row => {
+      totals[row.category] = (totals[row.category] || 0) + Number(row.amount || 0);
+    });
+    const keys = Object.keys(totals).sort((a, b) => totals[b] - totals[a]);
+    chartDashboardExpenseCategories = new Chart(dashboardExpenseCtx, {
+      type: 'bar',
+      data: {
+        labels: keys.length ? keys.map(key => categoryConfig[key]?.label || key) : ['No expenses'],
+        datasets: [{
+          label: 'Spent', data: keys.length ? keys.map(key => totals[key]) : [0],
+          backgroundColor: keys.map((_, index) => PALETTE[index % PALETTE.length]),
+          borderRadius: 5,
+        }],
+      },
+      options: {
+        indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ` ${fmt(ctx.raw)}` } } },
+        scales: {
+          x: { beginAtZero: true, grid: { color: '#f1f5f9' }, ticks: { callback: value => '₹' + (value / 1000).toFixed(0) + 'k' } },
+          y: { grid: { display: false } },
+        },
+        onClick: (_event, elements) => {
+          if (!elements.length || !keys[elements[0].index]) return;
+          expFilterCat = keys[elements[0].index];
+          navigateTo('expenses');
+          renderExpensesTable();
+        },
+      },
+    });
+  }
+
+  /* ---- Net-worth history from actual saved snapshots ---- */
   const wealthCtx = document.getElementById('wealthChart')?.getContext('2d');
   if (wealthCtx) {
-    const snapshots = [...netWorthHistory].slice(-12);
+    const snapshots = combinedNetWorthHistory().slice(-12);
+    const isBaseline = snapshots.length === 1;
+    const wealthSubtitle = document.getElementById('wealthChartSubtitle');
+    if (wealthSubtitle) {
+      wealthSubtitle.textContent = isBaseline
+        ? 'Baseline captured · growth appears after the next monthly snapshot'
+        : 'Automatically captured monthly · manual snapshots override';
+    }
     const wLabels = snapshots.map(row => String(row.month).replace(' 20', " '"));
     const wNetWorthData = snapshots.map(netWorthValue);
+    const wAssets = snapshots.map(row => ['cash', 'bank', 'investments', 'retirement', 'otherAssets']
+      .reduce((sum, key) => sum + Number(row[key] || 0), 0));
+    const wLiabilities = snapshots.map(row => ['loans', 'creditCards', 'otherLiabilities']
+      .reduce((sum, key) => sum + Number(row[key] || 0), 0));
 
     chartWealth = new Chart(wealthCtx, {
-      type: 'line',
+      type: isBaseline ? 'bar' : 'line',
       data: {
         labels: wLabels,
-        datasets: [{
-          label: 'Net Worth', data: wNetWorthData,
-          borderColor: '#6366f1', backgroundColor: 'rgba(99,102,241,0.15)',
-          fill: true, tension: 0.35, pointRadius: 4, borderWidth: 2,
-        }],
+        datasets: [
+          { label: 'Assets', data: wAssets, borderColor: '#10b981', backgroundColor: isBaseline ? 'rgba(16,185,129,0.65)' : 'transparent', tension: 0.35, pointRadius: 2, borderWidth: 2 },
+          { label: 'Liabilities', data: wLiabilities, borderColor: '#ef4444', backgroundColor: isBaseline ? 'rgba(239,68,68,0.65)' : 'transparent', tension: 0.35, pointRadius: 2, borderWidth: 2 },
+          { label: 'Net Worth', data: wNetWorthData, borderColor: '#6366f1', backgroundColor: isBaseline ? 'rgba(99,102,241,0.65)' : 'rgba(99,102,241,0.12)', fill: !isBaseline, tension: 0.35, pointRadius: 4, borderWidth: 2 },
+        ],
       },
       options: {
         responsive: true, maintainAspectRatio: false,
         interaction: { mode: 'index', intersect: false },
         plugins: {
-          legend: { display: false },
+          legend: { position: 'top', labels: { usePointStyle: true, boxWidth: 12 } },
           tooltip: {
-            callbacks: { label: ctx => ` Net Worth: ${fmt(ctx.raw)}` },
+            callbacks: { label: ctx => ` ${ctx.dataset.label}: ${fmt(ctx.raw)}` },
           },
         },
         scales: {
           y: {
+            beginAtZero: true,
             grid: { color: '#f1f5f9' },
             ticks: { callback: v => '₹' + (v / 1000).toFixed(0) + 'k' },
             title: { display: true, text: 'Net Worth (₹)', font: { size: 11 } },
@@ -2884,7 +3421,7 @@ function initCharts() {
 
   /* Update expense chart subtitle */
   const subEl = document.getElementById('expenseChartSubtitle');
-  if (subEl) subEl.textContent = `${MONTHS[currentMonthIdx]} ${currentYear}`;
+  if (subEl) subEl.textContent = dashboardPeriodRange().label;
 
   /* ---- 7. Expense Trend (line + bar, last 12 months) ---- */
   const expTrendCtx = document.getElementById('expenseTrendChart')?.getContext('2d');
@@ -2981,8 +3518,7 @@ function renderExpenseCategoryBreakdown() {
 
   /* Always use the month navigator so it stays synced */
   const monthExp = expensesForYM(currentMonthIdx, currentYear);
-  const curRow = savingsRowForMonth(currentMonthIdx, currentYear);
-  const income = curRow?.income || 0;
+  const income = incomeForYM(currentMonthIdx, currentYear);
 
   const periodLabel = `${MONTHS[currentMonthIdx]} ${currentYear}`;
   const total = monthExp.reduce((s, e) => s + e.amount, 0);
@@ -3084,12 +3620,86 @@ function investmentCategoriesForAccountType(type) {
   }[type] || [];
 }
 
+function eligibleSettlementAccounts() {
+  return activeAccounts().filter(account => !isInvestmentAccount(account) && !isLiabilityAccount(account));
+}
+
+function linkedSettlementAccount(accountOrId) {
+  const account = typeof accountOrId === 'object'
+    ? accountOrId
+    : accounts.find(row => Number(row.id) === Number(accountOrId));
+  return accounts.find(row => Number(row.id) === Number(account?.settlementAccountId)) || null;
+}
+
+function brokerCashBalance(accountOrId) {
+  const account = typeof accountOrId === 'object'
+    ? accountOrId
+    : accounts.find(row => Number(row.id) === Number(accountOrId));
+  if (!account || account.type !== 'demat') return 0;
+  const id = Number(account.id);
+  const openingDate = String(account.openingDate || '');
+  const included = value => !openingDate || !value || String(value) >= openingDate;
+  let cash = Number(account.openingBalance || 0);
+  transfers.forEach(row => {
+    if (!included(row.date)) return;
+    if (Number(row.fromAccountId) === id) cash -= Number(row.amount || 0);
+    if (Number(row.toAccountId) === id) cash += Number(row.amount || 0);
+  });
+  investments.forEach(inv => (inv.transactions || []).forEach(tx => {
+    const cashDate = transactionCashDate(tx);
+    if (Number(tx.accountId) !== id || !included(cashDate)) return;
+    const amount = transactionCashAmount(tx);
+    if (['BUY', 'DEPOSIT'].includes(tx.action)) cash -= amount;
+    if (['SELL', 'WITHDRAWAL'].includes(tx.action)) cash += amount;
+  }));
+  reconciliationAdjustments.forEach(row => {
+    if (Number(row.accountId) === id && included(row.date)) cash += Number(row.amount || 0);
+  });
+  return Math.abs(cash) < 0.005 ? 0 : cash;
+}
+
+function updateAccountSettlementField() {
+  const type = document.getElementById('accountType')?.value;
+  const select = document.getElementById('accountSettlementAccount');
+  if (!select) return;
+  const visible = ['demat', 'mutual_fund'].includes(type);
+  select.hidden = !visible;
+  select.required = false;
+  if (!visible) select.value = '';
+}
+
+function prepareBrokerCashWithdrawal(accountId) {
+  const account = accounts.find(row => Number(row.id) === Number(accountId));
+  const destination = linkedSettlementAccount(account);
+  const cash = brokerCashBalance(account);
+  if (!destination) {
+    alert('Link a settlement bank before withdrawing broker cash.');
+    openSettlementAccountModal(accountId);
+    return;
+  }
+  if (cash <= 0.005) {
+    alert('There is no available broker cash to withdraw.');
+    return;
+  }
+  populateAccountSelectors();
+  document.getElementById('transferDate').value = todayISO();
+  document.getElementById('transferFrom').value = String(account.id);
+  document.getElementById('transferTo').value = String(destination.id);
+  document.getElementById('transferAmount').value = cash.toFixed(2);
+  document.getElementById('transferNote').value = `${account.name} broker cash withdrawal`;
+  document.getElementById('transfersCard')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  document.getElementById('transferAmount')?.focus({ preventScroll: true });
+}
+
 function populateAccountSelectors() {
   const configs = {
+    incomeAccount: 'salary',
     expAccount: 'spending',
     invAccount: 'investment',
     tradeAccount: 'investment',
     accountTransactionAccount: 'investment',
+    accountSettlementAccount: null,
+    settlementBankAccount: null,
     transferFrom: null,
     transferTo: null,
     invContainerAccount: null,
@@ -3100,14 +3710,21 @@ function populateAccountSelectors() {
     const previous = select.value;
     const placeholder = id.startsWith('transfer')
       ? (id === 'transferFrom' ? 'From account' : 'To account')
-      : (id === 'expAccount' ? 'Select paying account'
+      : ['accountSettlementAccount', 'settlementBankAccount'].includes(id)
+        ? 'Select linked bank account'
+      : (id === 'incomeAccount' ? 'Select credited account'
+        : id === 'expAccount' ? 'Select paying account'
         : id === 'tradeAccount' ? 'Select settlement account'
           : 'Select funding account');
-    const selectable = id === 'invContainerAccount'
+    const selectable = ['accountSettlementAccount', 'settlementBankAccount'].includes(id)
+      ? eligibleSettlementAccounts()
+      : id === 'invContainerAccount'
       ? activeAccounts().filter(isInvestmentAccount)
-      : ['expAccount', 'invAccount', 'tradeAccount', 'accountTransactionAccount'].includes(id)
-        ? activeAccounts().filter(account => !isInvestmentAccount(account))
-        : activeAccounts();
+      : id === 'incomeAccount'
+        ? activeAccounts().filter(account => !isInvestmentAccount(account) && !isLiabilityAccount(account))
+        : ['expAccount', 'invAccount', 'tradeAccount', 'accountTransactionAccount'].includes(id)
+          ? activeAccounts().filter(account => !isInvestmentAccount(account) && !isLiabilityAccount(account))
+          : activeAccounts();
     select.innerHTML = `<option value="">${id === 'invContainerAccount' ? 'Select investment account' : placeholder}</option>` + selectable
       .map(row => `<option value="${row.id}">${escHtml(row.name)}${row.bank ? ` · ${escHtml(row.bank)}` : ''}</option>`)
       .join('');
@@ -3122,9 +3739,9 @@ function trackedAccountBalance(account) {
   const openingDate = String(account.openingDate || '');
   const included = value => !openingDate || !value || String(value) >= openingDate;
   let balance = Number(account.openingBalance || 0);
-  savingsHistory.forEach(row => {
-    if (Number(row.accountId) === id && included(monthKeyToISO(row.month))) {
-      balance += (liability ? -1 : 1) * Number(row.income || 0);
+  incomeTransactions.forEach(row => {
+    if (Number(row.accountId) === id && included(row.date)) {
+      balance += (liability ? -1 : 1) * Number(row.amount || 0);
     }
   });
   expenses.forEach(row => {
@@ -3138,8 +3755,9 @@ function trackedAccountBalance(account) {
     if (Number(row.toAccountId) === id) balance += (liability ? -1 : 1) * Number(row.amount || 0);
   });
   investments.forEach(inv => (inv.transactions || []).forEach(tx => {
-    if (Number(tx.accountId) !== id || !included(tx.date)) return;
-    const amount = Number(tx.units || 0) * Number(tx.price || 0);
+    const cashDate = transactionCashDate(tx);
+    if (Number(tx.accountId) !== id || !included(cashDate)) return;
+    const amount = transactionCashAmount(tx);
     if (['BUY', 'DEPOSIT'].includes(tx.action)) balance += (liability ? 1 : -1) * amount;
     if (['SELL', 'WITHDRAWAL'].includes(tx.action)) balance += (liability ? -1 : 1) * amount;
   }));
@@ -3162,14 +3780,14 @@ function accountLedgerEntries(accountId) {
   const openingDate = String(accountForDate?.openingDate || '');
   const included = value => !openingDate || !value || String(value) >= openingDate;
   const entries = [];
-  savingsHistory.forEach(row => {
-    if (Number(row.accountId) === id && Number(row.income || 0) !== 0
-        && included(monthKeyToISO(row.month))) {
+  incomeTransactions.forEach(row => {
+    if (Number(row.accountId) === id && Number(row.amount || 0) !== 0
+        && included(row.date)) {
       entries.push({
-        date: monthKeyToISO(row.month),
+        date: row.date,
         type: 'Income',
-        description: 'Monthly income',
-        amount: Number(row.income || 0),
+        description: row.description || incomeSourceLabel(row.source),
+        amount: Number(row.amount || 0),
       });
     }
   });
@@ -3203,11 +3821,12 @@ function accountLedgerEntries(accountId) {
     }
   });
   investments.forEach(inv => (inv.transactions || []).forEach(tx => {
-    if (Number(tx.accountId) !== id || !included(tx.date)) return;
-    const amount = Number(tx.units || 0) * Number(tx.price || 0);
+    const cashDate = transactionCashDate(tx);
+    if (Number(tx.accountId) !== id || !included(cashDate)) return;
+    const amount = transactionCashAmount(tx);
     if (['BUY', 'DEPOSIT'].includes(tx.action)) {
       entries.push({
-        date: tx.date,
+        date: cashDate,
         type: 'Investment',
         description: `${tx.action === 'BUY' ? 'Bought' : 'Deposited to'} ${inv.name || inv.asset}`,
         amount: -amount,
@@ -3215,7 +3834,7 @@ function accountLedgerEntries(accountId) {
     }
     if (['SELL', 'WITHDRAWAL'].includes(tx.action)) {
       entries.push({
-        date: tx.date,
+        date: cashDate,
         type: 'Investment return',
         description: `${tx.action === 'SELL' ? 'Sold' : 'Withdrew from'} ${inv.name || inv.asset}`,
         amount,
@@ -3224,8 +3843,21 @@ function accountLedgerEntries(accountId) {
   }));
   investments.filter(inv => Number(inv.containerAccountId) === id)
     .forEach(inv => (inv.transactions || []).forEach(tx => {
-      if (!included(tx.date)) return;
+      const opening = String(tx.source || '').toLowerCase() === 'opening';
+      if (!included(tx.date) && !opening) return;
       const amount = Number(tx.units || 0) * Number(tx.price || 0);
+      if (opening) {
+        const openingDetail = tx.action === 'ADJUSTMENT'
+          ? 'opening value adjustment'
+          : tx.action === 'INTEREST' ? 'opening interest' : 'prior holding';
+        entries.push({
+          date: tx.date,
+          type: 'Opening position',
+          description: `${inv.name || inv.asset || 'Investment holding'} · ${openingDetail}`,
+          amount,
+        });
+        return;
+      }
       if (['BUY', 'DEPOSIT', 'INTEREST'].includes(tx.action)) {
         entries.push({
           date: tx.date,
@@ -3240,6 +3872,14 @@ function accountLedgerEntries(accountId) {
           type: 'Investment out',
           description: inv.name || inv.asset || 'Investment holding',
           amount: -amount,
+        });
+      }
+      if (tx.action === 'ADJUSTMENT') {
+        entries.push({
+          date: tx.date,
+          type: 'Investment adjustment',
+          description: inv.name || inv.asset || 'Investment holding',
+          amount,
         });
       }
     }));
@@ -3290,6 +3930,107 @@ function netWorthValue(row) {
   return assets - liabilities;
 }
 
+const netWorthAmountFields = [
+  'cash', 'bank', 'investments', 'retirement', 'otherAssets',
+  'loans', 'creditCards', 'otherLiabilities',
+];
+
+function combinedNetWorthHistory() {
+  const byMonth = new Map();
+  automaticNetWorthHistory.forEach(row => {
+    if (row?.month) byMonth.set(row.month, { ...row, snapshotSource: 'automatic' });
+  });
+  // A user-entered snapshot is an explicit override for the same month.
+  netWorthHistory.forEach(row => {
+    if (row?.month) byMonth.set(row.month, { ...row, snapshotSource: 'manual' });
+  });
+  return [...byMonth.values()].sort((a, b) =>
+    monthKeyToISO(a.month).localeCompare(monthKeyToISO(b.month))
+  );
+}
+
+function buildAutomaticNetWorthSnapshot() {
+  const now = new Date();
+  const snapshot = {
+    month: `${MONTHS[now.getMonth()].slice(0, 3)} ${now.getFullYear()}`,
+    asOf: todayISO(),
+    cash: 0,
+    bank: 0,
+    investments: 0,
+    retirement: 0,
+    otherAssets: 0,
+    loans: 0,
+    creditCards: 0,
+    otherLiabilities: 0,
+  };
+
+  activeAccounts().forEach(account => {
+    const balance = trackedAccountBalance(account);
+    if (isLiabilityAccount(account)) {
+      if (account.type === 'credit_card') snapshot.creditCards += balance;
+      else if (account.type === 'loan') snapshot.loans += balance;
+      else snapshot.otherLiabilities += balance;
+      return;
+    }
+    if (isInvestmentAccount(account)) {
+      if (['ppf', 'nps'].includes(account.type)) snapshot.retirement += balance;
+      else snapshot.investments += balance;
+      return;
+    }
+    if (['cash', 'wallet'].includes(account.type)) snapshot.cash += balance;
+    else if (['bank_savings', 'bank_current'].includes(account.type)) snapshot.bank += balance;
+    else snapshot.otherAssets += balance;
+  });
+
+  // Holdings without a container account are not represented by an account,
+  // so include them separately. Container-linked holdings are already in the
+  // corresponding investment account balance.
+  investments.filter(inv => !inv.containerAccountId).forEach(inv => {
+    const value = investmentMetrics(inv).currentValue;
+    if (['ppf', 'nps'].includes(inv.category)) snapshot.retirement += value;
+    else snapshot.investments += value;
+  });
+  return snapshot;
+}
+
+function automaticSnapshotMatches(left, right) {
+  return Boolean(left && right && left.month === right.month && left.asOf === right.asOf
+    && netWorthAmountFields.every(key =>
+      Math.abs(Number(left[key] || 0) - Number(right[key] || 0)) < 0.005
+    ));
+}
+
+async function captureAutomaticNetWorthSnapshot(renderAfterSave = true) {
+  if (!serverAvailable) return false;
+  const snapshot = buildAutomaticNetWorthSnapshot();
+  const index = automaticNetWorthHistory.findIndex(row => row.month === snapshot.month);
+  const previous = index >= 0 ? { ...automaticNetWorthHistory[index] } : null;
+  if (automaticSnapshotMatches(previous, snapshot)) return false;
+
+  if (index >= 0) automaticNetWorthHistory[index] = snapshot;
+  else automaticNetWorthHistory.push(snapshot);
+  try {
+    await saveAutomaticNetWorth();
+    if (renderAfterSave) {
+      renderNetWorthHistoryList();
+      initCharts();
+    }
+    return true;
+  } catch (error) {
+    if (index >= 0) automaticNetWorthHistory[index] = previous;
+    else automaticNetWorthHistory.pop();
+    console.error('Automatic net-worth snapshot failed:', error);
+    return false;
+  }
+}
+
+let automaticNetWorthTimer = null;
+function scheduleAutomaticNetWorthSnapshot() {
+  if (!serverAvailable) return;
+  clearTimeout(automaticNetWorthTimer);
+  automaticNetWorthTimer = setTimeout(() => captureAutomaticNetWorthSnapshot(), 350);
+}
+
 function recurringRuleName(ruleId) {
   return recurringRules.find(rule => Number(rule.id) === Number(ruleId))?.name || 'Recurring investment';
 }
@@ -3332,7 +4073,7 @@ function renderRecurringAutomation() {
   if (accountSelect) {
     const previous = accountSelect.value;
     accountSelect.innerHTML = '<option value="">Paid from account</option>'
-      + activeAccounts().filter(account => !isInvestmentAccount(account)).map(account =>
+      + activeAccounts().filter(account => !isInvestmentAccount(account) && !isLiabilityAccount(account)).map(account =>
         `<option value="${account.id}">${escHtml(account.name)}</option>`
       ).join('');
     accountSelect.value = previous || String(defaultAccountId('investment') || '');
@@ -3367,6 +4108,193 @@ function renderRecurringAutomation() {
   }
 }
 
+function emergencySourceKey(sourceType, sourceId) {
+  return `${sourceType}:${Number(sourceId)}`;
+}
+
+function emergencySourceDetails(sourceType, sourceId) {
+  const id = Number(sourceId);
+  if (sourceType === 'account') {
+    const account = accounts.find(row => Number(row.id) === id);
+    if (!account) return null;
+    return {
+      sourceType: 'account', sourceId: id, source: account,
+      name: account.name,
+      detail: `${accountTypeLabels[account.type] || 'Account'} · ${account.bank || 'Institution not specified'}`,
+      value: Math.max(0, trackedAccountBalance(account)),
+      defaultLiquidity: 'immediate',
+    };
+  }
+  if (sourceType === 'investment') {
+    const investment = investments.find(row => Number(row.id) === id);
+    if (!investment) return null;
+    return {
+      sourceType: 'investment', sourceId: id, source: investment,
+      name: investment.name || investment.asset,
+      detail: `${typeLabels[investment.category] || investment.category} · ${accountName(investment.containerAccountId)}`,
+      value: Math.max(0, investmentMetrics(investment).currentValue),
+      defaultLiquidity: ['ppf', 'nps'].includes(investment.category) ? 'locked' : 'redeemable',
+    };
+  }
+  return null;
+}
+
+function emergencyAllocationSummary() {
+  const rows = emergencyAllocations.map(allocation => {
+    const details = emergencySourceDetails(allocation.sourceType, allocation.sourceId);
+    const sourceValue = Math.max(0, Number(details?.value || 0));
+    const requested = allocation.allocationMode === 'full'
+      ? sourceValue
+      : Math.max(0, Number(allocation.amount || 0));
+    const effective = Math.min(requested, sourceValue);
+    return { ...allocation, details, sourceValue, requested, effective };
+  });
+  const totals = rows.reduce((result, row) => {
+    if (row.liquidity === 'immediate') result.immediate += row.effective;
+    else if (row.liquidity === 'redeemable') result.redeemable += row.effective;
+    else result.locked += row.effective;
+    return result;
+  }, { immediate: 0, redeemable: 0, locked: 0 });
+  const target = Math.max(0, Number(emergencyFund.target || 0));
+  const usable = totals.immediate + totals.redeemable;
+  return {
+    rows, ...totals, usable, target,
+    designated: usable + totals.locked,
+    gap: Math.max(0, target - usable),
+    progress: target > 0 ? Math.min(100, usable / target * 100) : 0,
+  };
+}
+
+const emergencyLiquidityLabels = {
+  immediate: 'Available Now',
+  redeemable: 'Needs Redemption',
+  locked: 'Locked / Excluded',
+};
+
+function populateEmergencySourceSelect(editingId = 0) {
+  const select = document.getElementById('emergencyAllocationSource');
+  if (!select) return;
+  const assigned = new Set(emergencyAllocations
+    .filter(row => Number(row.id) !== Number(editingId))
+    .map(row => emergencySourceKey(row.sourceType, row.sourceId)));
+  const assetAccounts = activeAccounts()
+    .filter(account => !isInvestmentAccount(account) && !isLiabilityAccount(account))
+    .filter(account => !assigned.has(emergencySourceKey('account', account.id)));
+  const holdings = investments
+    .filter(investment => !assigned.has(emergencySourceKey('investment', investment.id)));
+  const accountOptions = assetAccounts.map(account => {
+    const details = emergencySourceDetails('account', account.id);
+    return `<option value="account:${account.id}">${escHtml(details.name)} · ${fmt(details.value)}</option>`;
+  }).join('');
+  const investmentOptions = holdings.map(investment => {
+    const details = emergencySourceDetails('investment', investment.id);
+    return `<option value="investment:${investment.id}">${escHtml(details.name)} · ${fmt(details.value)}</option>`;
+  }).join('');
+  select.innerHTML = '<option value="">Select an existing asset</option>'
+    + (accountOptions ? `<optgroup label="Cash and bank accounts">${accountOptions}</optgroup>` : '')
+    + (investmentOptions ? `<optgroup label="Investment holdings">${investmentOptions}</optgroup>` : '');
+}
+
+function updateEmergencyAllocationMode() {
+  const mode = document.getElementById('emergencyAllocationMode')?.value || 'full';
+  const group = document.getElementById('emergencyAllocationAmountGroup');
+  const input = document.getElementById('emergencyAllocationAmount');
+  if (group) group.hidden = mode !== 'amount';
+  if (input) input.required = mode === 'amount';
+  updateEmergencyAllocationPreview();
+}
+
+function updateEmergencyAllocationPreview() {
+  const preview = document.getElementById('emergencyAllocationPreview');
+  const sourceValue = document.getElementById('emergencyAllocationSource')?.value || '';
+  if (!preview || !sourceValue.includes(':')) {
+    if (preview) preview.textContent = 'Select an asset to see its current value.';
+    return;
+  }
+  const [sourceType, rawId] = sourceValue.split(':');
+  const details = emergencySourceDetails(sourceType, Number(rawId));
+  if (!details) {
+    preview.textContent = 'This asset is no longer available.';
+    return;
+  }
+  const mode = document.getElementById('emergencyAllocationMode')?.value || 'full';
+  const requested = mode === 'full'
+    ? details.value
+    : Math.max(0, numericValue('emergencyAllocationAmount'));
+  const effective = Math.min(requested, details.value);
+  preview.innerHTML = `Current value: <strong>${fmt(details.value)}</strong> · Emergency allocation: <strong>${fmt(effective)}</strong>${requested > details.value ? ' · capped at current value' : ''}`;
+}
+
+function openEmergencyAllocationModal(allocationId = 0) {
+  const allocation = emergencyAllocations.find(row => Number(row.id) === Number(allocationId));
+  const form = document.getElementById('emergencyAllocationForm');
+  if (!form) return;
+  form.reset();
+  document.getElementById('emergencyAllocationId').value = allocation?.id || '';
+  document.getElementById('emergencyAllocationTitle').textContent = allocation
+    ? 'Edit Emergency Allocation'
+    : 'Allocate Emergency Asset';
+  populateEmergencySourceSelect(allocation?.id || 0);
+  if (allocation) {
+    document.getElementById('emergencyAllocationSource').value =
+      emergencySourceKey(allocation.sourceType, allocation.sourceId);
+    document.getElementById('emergencyAllocationMode').value = allocation.allocationMode;
+    document.getElementById('emergencyAllocationAmount').value = allocation.amount || '';
+    document.getElementById('emergencyAllocationLiquidity').value = allocation.liquidity;
+    document.getElementById('emergencyAllocationNote').value = allocation.note || '';
+  }
+  updateEmergencyAllocationMode();
+  openModal('emergencyAllocationModal');
+}
+
+function renderEmergencyReserve() {
+  const summary = emergencyAllocationSummary();
+  const setText = (id, value) => {
+    const node = document.getElementById(id);
+    if (node) node.textContent = value;
+  };
+  setText('emergencyReserveUsable', fmt(summary.usable));
+  setText('emergencyReserveTarget', fmt(summary.target));
+  setText('emergencyReserveGap', summary.gap > 0 ? fmt(summary.gap) : summary.target > 0 ? 'Funded' : fmt(0));
+  setText('emergencyReserveImmediate', fmt(summary.immediate));
+  setText('emergencyReserveRedeemable', fmt(summary.redeemable));
+  setText('emergencyReserveLocked', fmt(summary.locked));
+  const progress = document.getElementById('emergencyReserveProgress');
+  if (progress) {
+    progress.style.width = `${summary.progress}%`;
+    progress.classList.toggle('complete', summary.target > 0 && summary.gap <= 0.005);
+  }
+  setText('emergencyReserveProgressText', summary.target > 0
+    ? `${summary.progress.toFixed(0)}% funded · ${fmt(summary.gap)} remaining`
+    : 'Set a target to measure progress');
+  const targetInput = document.getElementById('emergencyTargetInput');
+  if (targetInput && document.activeElement !== targetInput) {
+    targetInput.value = summary.target || '';
+  }
+  const list = document.getElementById('emergencyAllocationList');
+  if (!list) return;
+  const legacyNotice = Number(emergencyFund.current || 0) > 0
+    ? `<p class="planning-help reserve-legacy-note">Legacy contribution balance ${fmt(emergencyFund.current)} is preserved for history but is not counted until the real assets holding it are allocated here.</p>`
+    : '';
+  list.innerHTML = legacyNotice + (summary.rows.length ? summary.rows.map(row => {
+    const details = row.details;
+    const sourceName = details?.name || 'Missing asset';
+    const sourceDetail = details?.detail || `${row.sourceType} ${row.sourceId}`;
+    const amountLabel = row.allocationMode === 'full' ? 'Entire current value' : `Fixed at ${fmt(row.requested)}`;
+    const capped = row.requested > row.sourceValue + 0.005;
+    return `<div class="emergency-allocation-row">
+      <div class="reserve-source-name"><strong>${escHtml(sourceName)}</strong><span>${escHtml(sourceDetail)}${row.note ? ` · ${escHtml(row.note)}` : ''}</span></div>
+      <div class="reserve-row-value"><span>Current value</span><strong>${fmt(row.sourceValue)}</strong></div>
+      <div class="reserve-row-value"><span>${escHtml(amountLabel)}</span><strong>${fmt(row.effective)}${capped ? ' capped' : ''}</strong></div>
+      <span class="reserve-liquidity-badge reserve-liquidity-${row.liquidity}">${escHtml(emergencyLiquidityLabels[row.liquidity] || row.liquidity)}</span>
+      <div class="reserve-row-actions">
+        <button class="btn-secondary compact-btn" data-emergency-edit="${row.id}" type="button">Edit</button>
+        <button class="planning-delete" data-emergency-delete="${row.id}" type="button" title="Remove allocation">×</button>
+      </div>
+    </div>`;
+  }).join('') : '<p class="planning-empty">No assets allocated yet. Choose an existing bank balance, FD, mutual fund, or other holding.</p>');
+}
+
 function planningMetrics() {
   const rows = currentBudgetRows();
   const budgetTotal = rows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
@@ -3382,13 +4310,13 @@ function planningMetrics() {
     .filter(bill => bill.includedInBudget !== true && String(bill.includedInBudget).toLowerCase() !== 'true')
     .reduce((sum, bill) => sum + Number(bill.amount || 0), 0);
   const flow = currentCashFlowRow();
-  const income = savingsRowForMonth(currentMonthIdx, currentYear)?.income || 0;
+  const income = incomeForYM(currentMonthIdx, currentYear);
   const remainingBudget = Math.max(0, budgetTotal - spent);
   const forecast = flow
     ? Number(flow.openingBalance || 0) + Number(income) + Number(flow.otherIncome || 0)
       - remainingBudget - upcomingBillTotal
     : 0;
-  const latestSnapshot = netWorthHistory.at(-1);
+  const latestSnapshot = combinedNetWorthHistory().at(-1);
   const essentialCategories = new Set(['food', 'grocery', 'travel', 'housing', 'health', 'utilities']);
   let essentialTotal = 0;
   for (let offset = 0; offset < 3; offset++) {
@@ -3398,44 +4326,46 @@ function planningMetrics() {
       .reduce((sum, row) => sum + Number(row.amount || 0), 0);
   }
   const essentialMonthlyAverage = essentialTotal / 3;
+  const emergencyReserve = emergencyAllocationSummary();
   const emergencyCoverage = essentialMonthlyAverage > 0
-    ? Number(emergencyFund.current || 0) / essentialMonthlyAverage
+    ? emergencyReserve.usable / essentialMonthlyAverage
     : null;
   return {
     rows, budgetTotal, spent, upcomingBills, upcomingBillTotal,
     remainingBudget, flow, forecast, latestSnapshot,
     netWorth: netWorthValue(latestSnapshot),
-    emergencyCoverage,
+    emergencyCoverage, emergencyReserve,
   };
 }
 
 function renderFinancialSummary() {
   const text = document.getElementById('financialSummaryText');
   if (!text) return;
-  const metrics = planningMetrics();
-  const income = savingsRowForMonth(currentMonthIdx, currentYear)?.income || 0;
-  const savings = income - metrics.spent
-    - investmentOutflowForYM(currentMonthIdx, currentYear)
-    - efContribForYM(currentMonthIdx, currentYear);
-  const savingsRate = income > 0 ? savings / income * 100 : 0;
-  const prevM = currentMonthIdx === 0 ? 11 : currentMonthIdx - 1;
-  const prevY = currentMonthIdx === 0 ? currentYear - 1 : currentYear;
-  const previousSpend = expensesForYM(prevM, prevY).reduce((sum, row) => sum + Number(row.amount || 0), 0);
-  const change = previousSpend > 0 ? (metrics.spent - previousSpend) / previousSpend * 100 : null;
-
+  const data = dashboardPeriodData();
   const messages = [];
-  if (!income && !metrics.spent && !activeAccounts().length) {
-    messages.push(`No financial activity is recorded for ${planningMonthKey()}.`);
+  if (!data.income && !data.spent && !data.invested) {
+    messages.push(`No financial activity is recorded for ${data.range.label}.`);
   } else {
-    if (income > 0) messages.push(`Your savings rate is ${savingsRate.toFixed(1)}%.`);
-    if (change !== null) {
-      messages.push(`Spending is ${Math.abs(change).toFixed(0)}% ${change > 0 ? 'higher' : 'lower'} than last month.`);
-    }
-    if (activeAccounts().length) {
-      messages.push(`${activeAccounts().length} active account${activeAccounts().length === 1 ? '' : 's'} feed this view.`);
-    }
+    const rate = data.income > 0 ? data.surplus / data.income * 100 : 0;
+    messages.push(`${data.range.label}: ${rate.toFixed(1)}% of income remains after recorded expenses and investments.`);
+    if (data.surplus < 0) messages.push('The shortfall was funded from earlier balances or unrecorded income.');
   }
   text.textContent = messages.join(' ');
+}
+
+function renderNetWorthHistoryList() {
+  const history = document.getElementById('netWorthHistory');
+  if (!history) return;
+  const recent = combinedNetWorthHistory().slice(-6).reverse();
+  history.innerHTML = recent.length ? recent.map(row => {
+    const detail = row.snapshotSource === 'manual'
+      ? 'Manual snapshot'
+      : `Automatic · as of ${row.asOf ? fmtDate(row.asOf) : row.month}`;
+    return `<div class="planning-row simple">
+      <div><strong>${escHtml(row.month)}</strong><span>${escHtml(detail)}</span></div>
+      <strong>${fmt(netWorthValue(row))}</strong>
+    </div>`;
+  }).join('') : '<p class="planning-empty">No net-worth snapshots yet.</p>';
 }
 
 function renderPlanning() {
@@ -3457,6 +4387,7 @@ function renderPlanning() {
   setText('accountNetPosition', fmt(
     accountTotals.assets + accountTotals.investments - accountTotals.liabilities
   ));
+  renderEmergencyReserve();
   renderRecurringAutomation();
   renderDashboardActionItems();
   setText('planBudgetUsed', metrics.budgetTotal > 0 ? `${(metrics.spent / metrics.budgetTotal * 100).toFixed(0)}%` : 'Not set');
@@ -3487,12 +4418,16 @@ function renderPlanning() {
       const statement = Number(account.statementBalance || 0);
       const difference = statement - tracked;
       const liability = isLiabilityAccount(account);
+      const supportsSettlement = ['demat', 'mutual_fund'].includes(account.type);
+      const settlementAccount = linkedSettlementAccount(account);
+      const brokerCash = brokerCashBalance(account);
       const balanceLabel = liability ? 'FinTrack-calculated amount owed' : 'FinTrack-calculated balance';
       const statementLabel = liability ? 'Current statement amount owed' : 'Current bank balance';
       return `<div class="planning-row">
         <div class="planning-row-main">
           <strong>${escHtml(account.name)}</strong>
           <span>${escHtml(accountTypeLabels[account.type] || 'Account')} · ${escHtml(account.bank || 'Institution not specified')} · ${escHtml(account.purpose)}</span>
+          ${supportsSettlement ? `<span class="account-settlement-detail">Settlement bank: <strong>${escHtml(settlementAccount?.name || 'Not linked')}</strong>${account.type === 'demat' ? ` · Broker cash: <strong>${fmt(brokerCash)}</strong>` : ''}</span>` : ''}
         </div>
         <div class="account-balance-line">
           <div class="account-metric">
@@ -3508,6 +4443,8 @@ function renderPlanning() {
             <strong>${fmt(Math.abs(difference))}</strong>
           </div>
         </div>
+        ${supportsSettlement ? `<button class="btn-secondary compact-btn" data-account-settlement="${account.id}" type="button">${settlementAccount ? 'Change linked bank' : 'Link settlement bank'}</button>` : ''}
+        ${account.type === 'demat' && brokerCash > 0.005 ? `<button class="btn-primary compact-btn" data-broker-withdraw="${account.id}" type="button">Withdraw ${fmt(brokerCash)}</button>` : ''}
         <button class="btn-secondary compact-btn" data-account-review="${account.id}" type="button">Review balance</button>
         <button class="planning-delete" data-account-id="${account.id}" title="Remove account">×</button>
       </div>`;
@@ -3516,14 +4453,29 @@ function renderPlanning() {
 
   const transferList = document.getElementById('transferList');
   if (transferList) {
-    const recentTransfers = [...transfers].sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 10);
-    transferList.innerHTML = recentTransfers.length ? recentTransfers.map(row => `
+    const period = document.getElementById('transferPeriodFilter')?.value || 'month';
+    const fyStartYear = currentMonthIdx >= 3 ? currentYear : currentYear - 1;
+    const periodStart = period === 'month'
+      ? `${selectedYM()}-01`
+      : period === 'year' ? `${currentYear}-01-01` : `${fyStartYear}-04-01`;
+    const periodEnd = period === 'month'
+      ? `${selectedYM()}-${new Date(currentYear, currentMonthIdx + 1, 0).getDate()}`
+      : period === 'year' ? `${currentYear}-12-31` : `${fyStartYear + 1}-03-31`;
+    const periodLabel = period === 'month'
+      ? `${MONTHS[currentMonthIdx]} ${currentYear}`
+      : period === 'year' ? `calendar year ${currentYear}` : `FY ${fyStartYear}-${String(fyStartYear + 1).slice(2)}`;
+    const filteredTransfers = transfers
+      .filter(row => row.date && row.date >= periodStart && row.date <= periodEnd)
+      .sort((a, b) => String(b.date).localeCompare(String(a.date)) || Number(b.id || 0) - Number(a.id || 0));
+    const status = document.getElementById('transferFilterStatus');
+    if (status) status.textContent = `Transfers are not income or expenses. Showing ${filteredTransfers.length} for ${periodLabel}.`;
+    transferList.innerHTML = filteredTransfers.length ? filteredTransfers.map(row => `
       <div class="planning-row simple">
         <div><strong>${escHtml(accountName(row.fromAccountId))} → ${escHtml(accountName(row.toAccountId))}</strong>
           <span>${fmtDate(row.date)}${row.note ? ` · ${escHtml(row.note)}` : ''}</span></div>
         <strong>${fmt(Number(row.amount || 0))}</strong>
         <button class="planning-delete" data-transfer-id="${row.id}" title="Remove transfer">×</button>
-      </div>`).join('') : '<p class="planning-empty">No internal transfers recorded.</p>';
+      </div>`).join('') : `<p class="planning-empty">No internal transfers recorded for ${periodLabel}.</p>`;
   }
 
   const budgetList = document.getElementById('budgetList');
@@ -3553,20 +4505,14 @@ function renderPlanning() {
       </div>`).join('') : '<p class="planning-empty">No recurring bills configured.</p>';
   }
 
-  const history = document.getElementById('netWorthHistory');
-  if (history) {
-    const recent = [...netWorthHistory].slice(-6).reverse();
-    history.innerHTML = recent.length ? recent.map(row => `<div class="planning-row simple">
-      <span>${row.month}</span><strong>${fmt(netWorthValue(row))}</strong>
-    </div>`).join('') : '<p class="planning-empty">No net-worth snapshots yet.</p>';
-  }
+  renderNetWorthHistoryList();
 
   const forecast = document.getElementById('cashFlowForecast');
   if (forecast) {
     forecast.innerHTML = metrics.flow ? `
       <div class="forecast-equation">
         <span>Opening cash <strong>${fmt(Number(metrics.flow.openingBalance || 0))}</strong></span>
-        <span>Income + other <strong>+${fmt(Number(savingsRowForMonth(currentMonthIdx, currentYear)?.income || 0) + Number(metrics.flow.otherIncome || 0))}</strong></span>
+        <span>Income + other <strong>+${fmt(incomeForYM(currentMonthIdx, currentYear) + Number(metrics.flow.otherIncome || 0))}</strong></span>
         <span>Remaining budget <strong>-${fmt(metrics.remainingBudget)}</strong></span>
         <span>Upcoming bills <strong>-${fmt(metrics.upcomingBillTotal)}</strong></span>
         <span class="${metrics.forecast < Number(metrics.flow.safetyBalance || 0) ? 'forecast-warning' : 'forecast-good'}">Projected balance <strong>${fmt(metrics.forecast)}</strong></span>
@@ -3574,7 +4520,8 @@ function renderPlanning() {
   }
 
   const netWorthForm = document.getElementById('netWorthForm');
-  const monthSnapshot = netWorthHistory.find(row => row.month === planningMonthKey());
+  const monthSnapshot = netWorthHistory.find(row => row.month === planningMonthKey())
+    || automaticNetWorthHistory.find(row => row.month === planningMonthKey());
   if (netWorthForm && !netWorthForm.contains(document.activeElement)) {
     const snapshotInputs = {
       nwCash: 'cash', nwBank: 'bank', nwInvestments: 'investments',
@@ -3595,6 +4542,7 @@ function renderPlanning() {
     });
   }
   renderFinancialSummary();
+  scheduleAutomaticNetWorthSnapshot();
 }
 
 function renderAccountLedger(accountId) {
@@ -3630,6 +4578,7 @@ function renderAccountLedger(accountId) {
     if (type.includes('income')) return 'income';
     if (type.includes('expense')) return 'expense';
     if (type.includes('transfer')) return 'transfer';
+    if (type.includes('opening')) return 'opening';
     if (type.includes('adjustment')) return 'adjustment';
     return 'investment';
   };
@@ -3647,10 +4596,10 @@ function renderAccountLedger(accountId) {
     .reduce((sum, row) => sum - row.amount, 0);
   const netMovement = credits - debits;
   summary.innerHTML = `
-    <span>Money in <strong class="gain-positive">+${fmt(credits)}</strong></span>
-    <span>Money out <strong class="gain-negative">-${fmt(debits)}</strong></span>
-    <span>Net movement <strong class="${netMovement >= 0 ? 'gain-positive' : 'gain-negative'}">${netMovement >= 0 ? '+' : '-'}${fmt(Math.abs(netMovement))}</strong></span>
-    <span>FinTrack balance <strong>${fmt(trackedAccountBalance(account))}</strong></span>`;
+    <span><span>Money in</span><strong class="gain-positive">+${fmt(credits)}</strong></span>
+    <span><span>Money out</span><strong class="gain-negative">-${fmt(debits)}</strong></span>
+    <span><span>Net movement</span><strong class="${netMovement >= 0 ? 'gain-positive' : 'gain-negative'}">${netMovement >= 0 ? '+' : '-'}${fmt(Math.abs(netMovement))}</strong></span>
+    <span><span>FinTrack balance</span><strong>${fmt(trackedAccountBalance(account))}</strong></span>`;
   const ordered = sortOrder === 'asc' ? visibleEntries : [...visibleEntries].reverse();
   list.innerHTML = ordered.length ? `
     <div class="ledger-table-wrap">
@@ -3722,6 +4671,101 @@ function openReconciliation(accountId) {
 }
 
 function initPlanningEvents() {
+  document.getElementById('addEmergencyAllocationBtn')?.addEventListener('click', () => {
+    openEmergencyAllocationModal();
+  });
+  document.getElementById('emergencyAllocationMode')?.addEventListener('change', updateEmergencyAllocationMode);
+  document.getElementById('emergencyAllocationAmount')?.addEventListener('input', updateEmergencyAllocationPreview);
+  document.getElementById('emergencyAllocationSource')?.addEventListener('change', event => {
+    const [sourceType, rawId] = String(event.target.value || '').split(':');
+    const details = emergencySourceDetails(sourceType, Number(rawId));
+    if (details) document.getElementById('emergencyAllocationLiquidity').value = details.defaultLiquidity;
+    updateEmergencyAllocationPreview();
+  });
+  document.getElementById('emergencyTargetForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const target = numericValue('emergencyTargetInput');
+    if (!Number.isFinite(target) || target < 0) return;
+    const previousTarget = emergencyFund.target;
+    const submitButton = event.submitter || event.target.querySelector('button[type="submit"]');
+    if (submitButton) submitButton.disabled = true;
+    emergencyFund.target = target;
+    try {
+      await saveEmergencyFund();
+      emergencyFund = await apiGet('/emergency-fund');
+      renderPlanning();
+      showPriceToast('Emergency-fund target saved');
+    } catch (error) {
+      emergencyFund.target = previousTarget;
+      renderEmergencyReserve();
+      alert(`Emergency target was not saved.\n\n${error.message}`);
+    } finally {
+      if (submitButton) submitButton.disabled = false;
+    }
+  });
+  document.getElementById('emergencyAllocationForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const sourceValue = document.getElementById('emergencyAllocationSource').value;
+    const [sourceType, rawId] = String(sourceValue || '').split(':');
+    const sourceId = Number(rawId);
+    const details = emergencySourceDetails(sourceType, sourceId);
+    const allocationMode = document.getElementById('emergencyAllocationMode').value;
+    const amount = allocationMode === 'amount' ? numericValue('emergencyAllocationAmount') : 0;
+    const liquidity = document.getElementById('emergencyAllocationLiquidity').value;
+    if (!details || details.value <= 0) {
+      alert('Choose an existing asset with a positive current value.');
+      return;
+    }
+    if (allocationMode === 'amount' && (amount <= 0 || amount > details.value + 0.005)) {
+      alert(`Enter an allocation between ${fmt(0.01)} and the current value of ${fmt(details.value)}.`);
+      return;
+    }
+    const existingId = Number(document.getElementById('emergencyAllocationId').value || 0);
+    const row = {
+      id: existingId || Math.max(0, ...emergencyAllocations.map(item => Number(item.id || 0))) + 1,
+      sourceType,
+      sourceId,
+      allocationMode,
+      amount,
+      liquidity,
+      note: document.getElementById('emergencyAllocationNote').value.trim(),
+      updatedAt: new Date().toISOString(),
+    };
+    const nextRows = existingId
+      ? emergencyAllocations.map(item => Number(item.id) === existingId ? row : item)
+      : [...emergencyAllocations, row];
+    const submitButton = event.submitter || event.target.querySelector('button[type="submit"]');
+    if (submitButton) submitButton.disabled = true;
+    try {
+      await saveEmergencyAllocations(nextRows);
+      emergencyAllocations = await apiGet('/emergency-allocations');
+      closeModal('emergencyAllocationModal');
+      renderPlanning();
+      showPriceToast('Emergency allocation saved');
+    } catch (error) {
+      alert(`Emergency allocation was not saved.\n\n${error.message}`);
+    } finally {
+      if (submitButton) submitButton.disabled = false;
+    }
+  });
+  document.getElementById('emergencyAllocationList')?.addEventListener('click', async event => {
+    const editId = Number(event.target.dataset.emergencyEdit || 0);
+    if (editId) {
+      openEmergencyAllocationModal(editId);
+      return;
+    }
+    const deleteId = Number(event.target.dataset.emergencyDelete || 0);
+    if (!deleteId) return;
+    if (!confirm('Remove this emergency allocation? The underlying account or investment will not be changed.')) return;
+    const nextRows = emergencyAllocations.filter(row => Number(row.id) !== deleteId);
+    try {
+      await saveEmergencyAllocations(nextRows);
+      emergencyAllocations = await apiGet('/emergency-allocations');
+      renderPlanning();
+    } catch (error) {
+      alert(`Emergency allocation was not removed.\n\n${error.message}`);
+    }
+  });
   document.getElementById('ledgerAccountSelect')?.addEventListener('change', event => {
     renderAccountLedger(event.target.value);
   });
@@ -3730,6 +4774,7 @@ function initPlanningEvents() {
       renderAccountLedger(document.getElementById('ledgerAccountSelect')?.value);
     });
   });
+  document.getElementById('transferPeriodFilter')?.addEventListener('change', renderPlanning);
   document.getElementById('ledgerSearch')?.addEventListener('input', () => {
     renderAccountLedger(document.getElementById('ledgerAccountSelect')?.value);
   });
@@ -3874,22 +4919,87 @@ function initPlanningEvents() {
       openingBalance: numericValue('accountOpeningBalance'),
       statementBalance: numericValue('accountStatementBalance'),
       creditLimit: numericValue('accountCreditLimit'),
+      settlementAccountId: Number(document.getElementById('accountSettlementAccount').value) || null,
       includeNetWorth: true,
       active: true,
     };
-    accounts.push(newAccount);
     const compatibleCategories = investmentCategoriesForAccountType(accountType);
-    let linkedExistingHoldings = false;
-    investments.forEach(inv => {
+    const nextInvestments = investments.map(inv => {
       if (!inv.containerAccountId && compatibleCategories.includes(inv.category)) {
-        inv.containerAccountId = newAccount.id;
-        linkedExistingHoldings = true;
+        return { ...inv, containerAccountId: newAccount.id };
       }
+      return inv;
     });
-    await saveAccounts();
-    if (linkedExistingHoldings) await saveInvestments();
-    event.target.reset();
-    renderPlanning();
+    const linkedExistingHoldings = nextInvestments.some((inv, index) =>
+      Number(inv.containerAccountId || 0) !== Number(investments[index]?.containerAccountId || 0)
+    );
+    const nextAccounts = [...accounts, newAccount];
+    const submitButton = event.submitter || event.target.querySelector('button[type="submit"]');
+    if (submitButton) submitButton.disabled = true;
+    setAccountSaveStatus('Saving to data.xlsx…', 'saving');
+    try {
+      await saveAccounts(nextAccounts);
+      const persistedAccounts = await apiGet('/accounts');
+      const wasVerified = persistedAccounts.some(
+        row => Number(row.id) === Number(newAccount.id)
+      );
+      if (!wasVerified) throw new Error('The account was not found after saving. Please try again.');
+      accounts = persistedAccounts;
+
+      if (linkedExistingHoldings) {
+        try {
+          await apiPost('/investments', nextInvestments);
+          investments = await apiGet('/investments');
+        } catch (linkError) {
+          event.target.reset();
+          document.getElementById('accountOpeningDate').value = todayISO();
+          updateAccountSettlementField();
+          setAccountSaveStatus(
+            `${newAccount.name} was saved, but existing holdings were not linked: ${linkError.message}`,
+            'error'
+          );
+          renderPlanning();
+          alert(`Account saved, but existing holdings could not be linked.\n\n${linkError.message}`);
+          return;
+        }
+      }
+
+      event.target.reset();
+      document.getElementById('accountOpeningDate').value = todayISO();
+      updateAccountSettlementField();
+      setAccountSaveStatus(`${newAccount.name} saved to data.xlsx.`, 'success');
+      renderPlanning();
+    } catch (error) {
+      setAccountSaveStatus(`Not saved: ${error.message}`, 'error');
+      alert(`Account was not saved.\n\n${error.message}`);
+    } finally {
+      if (submitButton) submitButton.disabled = !serverAvailable;
+    }
+  });
+
+  document.getElementById('accountType')?.addEventListener('change', updateAccountSettlementField);
+
+  document.getElementById('settlementAccountForm')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    const accountId = Number(document.getElementById('settlementInvestmentAccountId').value);
+    const settlementAccountId = Number(document.getElementById('settlementBankAccount').value);
+    const account = accounts.find(row => Number(row.id) === accountId);
+    if (!account || !settlementAccountId) return;
+    const previous = account.settlementAccountId || null;
+    account.settlementAccountId = settlementAccountId;
+    const submitButton = event.submitter || event.target.querySelector('button[type="submit"]');
+    if (submitButton) submitButton.disabled = true;
+    try {
+      await saveAccounts();
+      accounts = await apiGet('/accounts');
+      closeModal('settlementAccountModal');
+      renderPlanning();
+    } catch (error) {
+      account.settlementAccountId = previous;
+      alert(`Settlement account was not saved.\n\n${error.message}`);
+    } finally {
+      if (submitButton) submitButton.disabled = false;
+    }
   });
 
   document.getElementById('transferForm')?.addEventListener('submit', async event => {
@@ -3902,6 +5012,10 @@ function initPlanningEvents() {
       return;
     }
     const sourceAccount = accounts.find(row => Number(row.id) === fromAccountId);
+    if (sourceAccount?.type === 'demat' && brokerCashBalance(sourceAccount) + 0.005 < amount) {
+      alert(`${sourceAccount.name} has only ${fmt(Math.max(0, brokerCashBalance(sourceAccount)))} available as broker cash.`);
+      return;
+    }
     if (sourceAccount && !isLiabilityAccount(sourceAccount)
         && trackedAccountBalance(sourceAccount) < amount) {
       alert(`${sourceAccount.name} does not have enough tracked balance for this transfer.`);
@@ -3965,6 +5079,7 @@ function initPlanningEvents() {
     else netWorthHistory.push(snapshot);
     await saveNetWorth();
     renderPlanning();
+    initCharts();
   });
 
   document.getElementById('cashFlowForm')?.addEventListener('submit', async event => {
@@ -4014,6 +5129,16 @@ function initPlanningEvents() {
   });
 
   document.getElementById('accountList')?.addEventListener('click', async event => {
+    const settlementId = Number(event.target.dataset.accountSettlement);
+    if (settlementId) {
+      openSettlementAccountModal(settlementId);
+      return;
+    }
+    const withdrawalId = Number(event.target.dataset.brokerWithdraw);
+    if (withdrawalId) {
+      prepareBrokerCashWithdrawal(withdrawalId);
+      return;
+    }
     const reviewId = Number(event.target.dataset.accountReview);
     if (reviewId) {
       openReconciliation(reviewId);
@@ -4022,12 +5147,14 @@ function initPlanningEvents() {
     const id = Number(event.target.dataset.accountId);
     if (!id) return;
     const referenced = expenses.some(row => Number(row.accountId) === id)
-      || savingsHistory.some(row => Number(row.accountId) === id)
+      || incomeTransactions.some(row => Number(row.accountId) === id)
       || transfers.some(row => Number(row.fromAccountId) === id || Number(row.toAccountId) === id)
       || investments.some(inv => Number(inv.containerAccountId) === id
         || (inv.transactions || []).some(tx => Number(tx.accountId) === id))
+      || accounts.some(row => Number(row.settlementAccountId) === id)
       || reconciliationAdjustments.some(row => Number(row.accountId) === id)
-      || recurringRules.some(row => Number(row.fromAccountId) === id);
+      || recurringRules.some(row => Number(row.fromAccountId) === id)
+      || emergencyAllocations.some(row => row.sourceType === 'account' && Number(row.sourceId) === id);
     if (referenced) {
       alert('This account is used by existing records. Reassign them before removing it.');
       return;
@@ -4089,6 +5216,7 @@ function refreshDashboard() {
   renderRecentTransactions();
   renderDashboardCards();
   renderSavingsCards();
+  renderIncomeTransactions();
   renderSavingsTable();
   renderExpensesTable();
   renderPlanning();
@@ -4114,9 +5242,69 @@ document.getElementById('nextMonth')?.addEventListener('click', () => {
    FORM SUBMISSIONS  (front-end only — appends to local array)
    ============================================================ */
 
-document.getElementById('expenseForm')?.addEventListener('submit', e => {
+function openIncomeModal() {
+  const available = activeAccounts().filter(account => !isInvestmentAccount(account) && !isLiabilityAccount(account));
+  if (!available.length) {
+    alert('Add an active bank, cash, or wallet account before recording income.');
+    navigateTo('planning');
+    return;
+  }
+  populateAccountSelectors();
+  const dateInput = document.getElementById('incomeDate');
+  if (dateInput) dateInput.value = todayISO();
+  openModal('incomeModal');
+}
+
+document.getElementById('btnAddIncome')?.addEventListener('click', openIncomeModal);
+document.getElementById('btnAddIncomeFromSavings')?.addEventListener('click', openIncomeModal);
+document.getElementById('dashIncome')?.addEventListener('click', openIncomeModal);
+
+document.getElementById('dashboardPeriod')?.addEventListener('change', event => {
+  const custom = event.target.value === 'custom';
+  const fields = document.getElementById('dashboardCustomDates');
+  if (fields) fields.hidden = !custom;
+  renderDashboardCards();
+  renderRecentTransactions();
+  renderFinancialSummary();
+  initCharts();
+});
+
+['dashboardDateFrom', 'dashboardDateTo'].forEach(id => {
+  document.getElementById(id)?.addEventListener('change', () => {
+    renderDashboardCards();
+    renderRecentTransactions();
+    renderFinancialSummary();
+    initCharts();
+  });
+});
+
+document.getElementById('incomeForm')?.addEventListener('submit', async event => {
+  event.preventDefault();
+  const form = event.target;
+  incomeTransactions.push({
+    id: Date.now(),
+    date: form.date.value,
+    source: form.source.value,
+    description: form.description.value.trim(),
+    amount: Number(form.amount.value),
+    accountId: Number(form.accountId.value),
+  });
+  try {
+    await saveIncomeTransactions();
+    if (serverAvailable) savingsHistory = await apiGet('/savings-history');
+    form.reset();
+    closeModal('incomeModal');
+    refreshDashboard();
+  } catch (error) {
+    incomeTransactions.pop();
+    alert(`Income could not be saved: ${error.message}`);
+  }
+});
+
+document.getElementById('expenseForm')?.addEventListener('submit', async e => {
   e.preventDefault();
   const form = e.target;
+  const previousExpenses = expenses.map(row => ({ ...row }));
   if (_editingExpenseId != null) {
     // Edit mode — update existing expense
     const exp = expenses.find(x => x.id === _editingExpenseId);
@@ -4140,30 +5328,44 @@ document.getElementById('expenseForm')?.addEventListener('submit', e => {
       accountId:   Number(form.accountId.value) || null,
     });
   }
-  saveExpenses();
-  refreshDashboard();
-  closeModal('expenseModal');
+  const submitButton = e.submitter || form.querySelector('button[type="submit"]');
+  if (submitButton) submitButton.disabled = true;
+  try {
+    await saveExpenses();
+    expenses = await apiGet('/expenses');
+    refreshDashboard();
+    closeModal('expenseModal');
+  } catch (error) {
+    expenses = previousExpenses;
+    alert(`Expense was not saved.\n\n${error.message}`);
+  } finally {
+    if (submitButton) submitButton.disabled = false;
+  }
 });
 
-document.getElementById('investmentForm')?.addEventListener('submit', e => {
+document.getElementById('investmentForm')?.addEventListener('submit', async e => {
   e.preventDefault();
   const form = e.target;
   const cat  = form.type.value;
+  const entryMode = form.querySelector('input[name="entryMode"]:checked')?.value || 'connected';
+  const isPrior = entryMode === 'prior';
+  const isBalanceAccount = balanceCategories.includes(cat);
+  const buyPrice = parseFloat(form.buyPrice.value);
+  const currentPrice = isBalanceAccount && !isPrior
+    ? buyPrice
+    : parseFloat(form.currentPrice.value);
   const inv  = {
     id:           Date.now(),
     asset:        form.asset.value.trim().toUpperCase(),
     name:         form.querySelector('#invName').value.trim() || form.asset.value.trim(),
     category:     cat,
-    units:        balanceCategories.includes(cat) ? 1 : parseFloat(form.units.value),
-    buyPrice:     parseFloat(form.buyPrice.value),
-    currentPrice: parseFloat(form.currentPrice.value),
+    units:        isBalanceAccount ? 1 : parseFloat(form.units.value),
+    buyPrice,
+    currentPrice,
     date:         form.date.value,
     containerAccountId: Number(document.getElementById('invContainerAccount').value) || null,
+    entryMode,
   };
-  if (marketCategories.includes(cat)) {
-    inv.marketCap = form.querySelector('#invMarketCap')?.value || 'large';
-    inv.riskLevel = form.querySelector('#invRiskLevel')?.value || 'moderate';
-  }
   /* Auto-derive ticker from asset code for price lookups */
   const asset = inv.asset;
   if (cat === 'stocks') {
@@ -4174,28 +5376,43 @@ document.getElementById('investmentForm')?.addEventListener('submit', e => {
   const scheme = form.querySelector('#invSchemeCode')?.value.trim();
   if (scheme) inv.schemeCode = scheme;
 
-  if (balanceCategories.includes(cat)) {
-    const accountId = Number(document.getElementById('invAccount').value) || null;
+  if (isBalanceAccount) {
+    const accountId = isPrior ? null : Number(document.getElementById('invAccount').value) || null;
     inv.transactions = [{
       date: inv.date, action: 'DEPOSIT', units: 1, price: inv.buyPrice, accountId,
+      source: isPrior ? 'opening' : 'connected',
     }];
-    const initialInterest = inv.currentPrice - inv.buyPrice;
-    if (initialInterest > 0) {
+    const openingValueAdjustment = inv.currentPrice - inv.buyPrice;
+    if (isPrior && Math.abs(openingValueAdjustment) >= 0.01) {
       inv.transactions.push({
-        date: inv.date, action: 'INTEREST', units: 1, price: initialInterest,
-        accountId: null,
+        date: inv.date,
+        action: cat === 'ppf' && openingValueAdjustment > 0 ? 'INTEREST' : 'ADJUSTMENT',
+        units: 1, price: openingValueAdjustment,
+        accountId: null, source: 'opening',
       });
     }
   } else {
     inv.transactions = [{
       date: inv.date, action: 'BUY', units: inv.units, price: inv.buyPrice,
-      accountId: Number(document.getElementById('invAccount').value) || null,
+      accountId: isPrior ? null : Number(document.getElementById('invAccount').value) || null,
+      source: isPrior ? 'opening' : 'connected',
     }];
   }
   investments.push(inv);
-  saveInvestments();
-  renderAfterInvestmentChange();
-  closeModal('investmentModal');
+  const submitButton = e.submitter || form.querySelector('button[type="submit"]');
+  if (submitButton) submitButton.disabled = true;
+  try {
+    await saveInvestments();
+    investments = await apiGet('/investments');
+    renderAfterInvestmentChange();
+    form.reset();
+    closeModal('investmentModal');
+  } catch (error) {
+    investments = investments.filter(row => Number(row.id) !== Number(inv.id));
+    alert(`Investment was not saved.\n\n${error.message}`);
+  } finally {
+    if (submitButton) submitButton.disabled = false;
+  }
 });
 
 document.getElementById('goalForm')?.addEventListener('submit', e => {
@@ -4541,11 +5758,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Set today's date as default in date inputs
   const today = todayISO();
   document.querySelectorAll('input[type="date"]').forEach(el => { el.value = today; });
+  const fyStartYear = new Date().getMonth() >= 3 ? new Date().getFullYear() : new Date().getFullYear() - 1;
+  const dashboardFrom = document.getElementById('dashboardDateFrom');
+  const dashboardTo = document.getElementById('dashboardDateTo');
+  if (dashboardFrom) dashboardFrom.value = `${fyStartYear}-04-01`;
+  if (dashboardTo) dashboardTo.value = today;
 
   // Load data from the local server
   await loadAllData();
   if (serverAvailable) {
     await generateRecurringOccurrences();
+    await captureAutomaticNetWorthSnapshot(false);
+    loadMfCatalogStatus(true);
   }
 
   // Show server status badge
@@ -4554,6 +5778,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     badge.textContent = serverAvailable ? '🟢 Server' : '🟡 Offline';
     badge.title = serverAvailable ? 'Data saved to data.xlsx' : 'Server offline — data resets on refresh';
   }
+  const accountSubmit = document.querySelector('#accountForm button[type="submit"]');
+  if (accountSubmit) accountSubmit.disabled = !serverAvailable;
+  setAccountSaveStatus(
+    serverAvailable
+      ? 'Ready — new accounts are saved directly to data.xlsx.'
+      : 'Server offline — start it and refresh before adding accounts.',
+    serverAvailable ? '' : 'error'
+  );
 
   // Fetch and display system username
   if (serverAvailable) {
@@ -4577,11 +5809,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Render all data
   populateAccountSelectors();
+  updateAccountSettlementField();
   renderRecentTransactions();
   renderInvestmentSnapshot();
   renderExpensesTable();
   renderInvestmentsTable();
   renderSavingsCards();
+  renderIncomeTransactions();
   renderSavingsTable();
   renderPlanning();
   initPlanningEvents();

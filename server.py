@@ -13,19 +13,22 @@ Open: http://localhost:5000
 
 import hashlib
 import calendar
+import math
 import os
 import re
 import shutil
+import sqlite3
 import tempfile
 import threading
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
 import openpyxl
 import requests
 import gspread
+from gspread.utils import ValueRenderOption
 from google.oauth2.service_account import Credentials
 
 # ─── Config (override via environment variables) ────────────────────
@@ -33,8 +36,11 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get("FINTRACK_DATA_DIR", str(BASE_DIR)))
 DATA_FILE = DATA_DIR / "data.xlsx"
 BACKUP_DIR = DATA_DIR / "backups"
+CACHE_DIR = DATA_DIR / "cache"
+MARKET_CACHE_FILE = CACHE_DIR / "market_data.sqlite"
 BACKUP_KEEP = max(3, int(os.environ.get("FINTRACK_BACKUP_KEEP", "20")))
 _file_lock = threading.Lock()
+_market_cache_lock = threading.Lock()
 
 CONFIG_DIR = BASE_DIR / "config"
 _env_file = CONFIG_DIR / "gsheets.env"
@@ -63,18 +69,26 @@ app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="")
 # ═══════════════════════════════════════════════════════════════
 
 EXPENSE_COLS = ["id", "date", "description", "category", "payment", "amount", "accountId"]
+INCOME_COLS = ["id", "date", "source", "description", "amount", "accountId"]
 INVESTMENT_COLS = [
     "id", "asset", "name", "category", "units", "buyPrice",
     "currentPrice", "date", "marketCap", "riskLevel", "ticker", "schemeCode",
-    "containerAccountId",
+    "containerAccountId", "entryMode",
 ]
-TRANSACTION_COLS = ["investmentId", "date", "action", "units", "price", "accountId"]
+TRANSACTION_COLS = [
+    "investmentId", "date", "action", "units", "price", "accountId", "source",
+    "settlementDate", "charges",
+]
 SAVINGS_HIST_COLS = [
     "month", "income", "expenses", "invested", "emergency", "net_saved", "accountId",
 ]
 SAVINGS_GOAL_COLS = ["id", "name", "icon", "target", "current", "deadline"]
 EMERGENCY_COLS = ["target"]
 EMERGENCY_CONTRIB_COLS = ["id", "date", "amount", "note"]
+EMERGENCY_ALLOCATION_COLS = [
+    "id", "sourceType", "sourceId", "allocationMode", "amount",
+    "liquidity", "note", "updatedAt",
+]
 BUDGET_COLS = ["month", "category", "amount"]
 RECURRING_BILL_COLS = [
     "id", "name", "category", "amount", "dueDay", "frequency", "active",
@@ -84,10 +98,15 @@ NET_WORTH_COLS = [
     "month", "cash", "bank", "investments", "retirement", "otherAssets",
     "loans", "creditCards", "otherLiabilities",
 ]
+NET_WORTH_AUTO_COLS = [
+    "month", "asOf", "cash", "bank", "investments", "retirement",
+    "otherAssets", "loans", "creditCards", "otherLiabilities",
+]
 CASH_FLOW_COLS = ["month", "openingBalance", "otherIncome", "safetyBalance"]
 ACCOUNT_COLS = [
     "id", "name", "bank", "type", "classification", "purpose", "currency", "openingDate",
     "openingBalance", "statementBalance", "creditLimit", "includeNetWorth", "active",
+    "settlementAccountId",
 ]
 TRANSFER_COLS = ["id", "date", "fromAccountId", "toAccountId", "amount", "note"]
 RECONCILIATION_ADJUSTMENT_COLS = [
@@ -103,16 +122,62 @@ RECURRING_OCCURRENCE_COLS = [
 ]
 
 PLANNING_SHEETS = {
+    "IncomeTransactions": INCOME_COLS,
     "Budgets": BUDGET_COLS,
     "RecurringBills": RECURRING_BILL_COLS,
     "NetWorth": NET_WORTH_COLS,
+    "NetWorthAuto": NET_WORTH_AUTO_COLS,
     "CashFlow": CASH_FLOW_COLS,
     "Accounts": ACCOUNT_COLS,
     "Transfers": TRANSFER_COLS,
     "ReconciliationAdjustments": RECONCILIATION_ADJUSTMENT_COLS,
     "RecurringRules": RECURRING_RULE_COLS,
     "RecurringOccurrences": RECURRING_OCCURRENCE_COLS,
+    "EmergencyAllocations": EMERGENCY_ALLOCATION_COLS,
 }
+
+
+def _migrate_legacy_income(wb):
+    """Create dated income entries from legacy monthly totals exactly once."""
+    if "IncomeTransactions" not in wb.sheetnames or "SavingsHistory" not in wb.sheetnames:
+        return False
+    income_ws = wb["IncomeTransactions"]
+    if income_ws.max_row > 1:
+        return False
+
+    savings_ws = wb["SavingsHistory"]
+    headers = {str(cell.value): index for index, cell in enumerate(savings_ws[1]) if cell.value}
+    required = {"month", "income", "accountId"}
+    if not required.issubset(headers):
+        return False
+
+    additions = []
+    for row in savings_ws.iter_rows(min_row=2, values_only=True):
+        label = row[headers["month"]] if headers["month"] < len(row) else None
+        amount = row[headers["income"]] if headers["income"] < len(row) else None
+        account_id = row[headers["accountId"]] if headers["accountId"] < len(row) else None
+        parsed = _parse_month_label(label)
+        try:
+            amount = float(amount or 0)
+        except (TypeError, ValueError):
+            amount = 0
+        if not parsed or amount <= 0 or not account_id:
+            continue
+        year, month = parsed
+        paid_date = date(year, month, calendar.monthrange(year, month)[1])
+        additions.append([
+            len(additions) + 1,
+            paid_date,
+            "salary",
+            f"Migrated monthly income - {label}",
+            amount,
+            account_id,
+        ])
+
+    for item in additions:
+        income_ws.append(item)
+        income_ws.cell(row=income_ws.max_row, column=2).number_format = DATE_FMT
+    return bool(additions)
 
 
 def _ensure_planning_sheets(wb):
@@ -135,6 +200,11 @@ def _ensure_planning_sheets(wb):
             )
         ws.freeze_panes = "A2"
         ws.auto_filter.ref = ws.dimensions
+        if sheet_name == "EmergencyAllocations":
+            widths = [14, 16, 16, 18, 16, 18, 36, 24]
+            for column_index, width in enumerate(widths, 1):
+                letter = openpyxl.utils.get_column_letter(column_index)
+                ws.column_dimensions[letter].width = width
         changed = True
     return changed
 
@@ -168,14 +238,15 @@ def _safe_save(wb):
     try:
         wb.save(tmp_path)
         wb.close()
-        # Retry rename in case of OneDrive lock
+        # Retry the atomic replacement in case Excel, OneDrive, or antivirus
+        # briefly holds the destination file.
         for i in range(5):
             try:
-                shutil.move(tmp_path, str(DATA_FILE))
+                os.replace(tmp_path, DATA_FILE)
                 return
             except PermissionError:
                 time.sleep(0.3 * (i + 1))
-        shutil.move(tmp_path, str(DATA_FILE))
+        os.replace(tmp_path, DATA_FILE)
     except Exception:
         # Clean up temp file on failure
         try:
@@ -219,6 +290,7 @@ def _ensure_workbook():
             }
             for sheet_name, columns in schemas.items():
                 changed = _migrate_sheet_schema(wb, sheet_name, columns) or changed
+            changed = _migrate_legacy_income(wb) or changed
             if changed:
                 _backup_workbook()
                 _safe_save(wb)
@@ -266,17 +338,23 @@ def _ensure_workbook():
 
     # Create empty, formatted sheets. User data is added through the app or expense sync.
     _create_sheet("Expenses", EXPENSE_COLS, widths=[12, 14, 35, 16, 14, 14])
-    _create_sheet("Investments", INVESTMENT_COLS, widths=[14, 14, 28, 18, 12, 16, 16, 14, 12, 12, 16, 14])
-    _create_sheet("Transactions", TRANSACTION_COLS, widths=[14, 14, 10, 12, 16])
+    _create_sheet("IncomeTransactions", INCOME_COLS, widths=[12, 14, 18, 36, 16, 16])
+    _create_sheet("Investments", INVESTMENT_COLS, widths=[14, 14, 28, 18, 12, 16, 16, 14, 12, 12, 16, 14, 18, 14])
+    _create_sheet("Transactions", TRANSACTION_COLS, widths=[14, 14, 10, 12, 16, 14, 14, 16, 14])
     _create_sheet("SavingsGoals", SAVINGS_GOAL_COLS, widths=[12, 24, 8, 16, 16, 14])
     _create_sheet("EmergencyFund", EMERGENCY_COLS, widths=[16])
     _create_sheet("EFContributions", EMERGENCY_CONTRIB_COLS, widths=[12, 14, 16, 30])
+    _create_sheet(
+        "EmergencyAllocations", EMERGENCY_ALLOCATION_COLS,
+        widths=[14, 16, 16, 18, 16, 18, 36, 24],
+    )
     _create_sheet("SavingsHistory", SAVINGS_HIST_COLS, widths=[14, 16, 16, 16, 16, 16])
     _create_sheet("Budgets", BUDGET_COLS, widths=[14, 18, 16])
     _create_sheet("RecurringBills", RECURRING_BILL_COLS, widths=[12, 28, 18, 16, 12, 14, 12])
     _create_sheet("NetWorth", NET_WORTH_COLS, widths=[14, 16, 16, 16, 16, 16, 16, 16, 18])
+    _create_sheet("NetWorthAuto", NET_WORTH_AUTO_COLS, widths=[14, 14, 16, 16, 16, 16, 16, 16, 16, 18])
     _create_sheet("CashFlow", CASH_FLOW_COLS, widths=[14, 18, 16, 18])
-    _create_sheet("Accounts", ACCOUNT_COLS, widths=[12, 24, 18, 18, 16, 18, 12, 14, 18, 18, 16, 18, 12])
+    _create_sheet("Accounts", ACCOUNT_COLS, widths=[12, 24, 18, 18, 16, 18, 12, 14, 18, 18, 16, 18, 12, 20])
     _create_sheet("Transfers", TRANSFER_COLS, widths=[12, 14, 18, 18, 16, 30])
     _create_sheet(
         "ReconciliationAdjustments", RECONCILIATION_ADJUSTMENT_COLS,
@@ -289,7 +367,7 @@ def _ensure_workbook():
     print("[OK] Created empty data.xlsx workbook")
 
 # Columns that hold date values (written as Excel dates, read back as ISO strings)
-DATE_COLUMNS = {"date", "deadline", "openingDate"}
+DATE_COLUMNS = {"date", "deadline", "openingDate", "asOf", "settlementDate"}
 DATE_FMT = "YYYY-MM-DD"   # Excel custom number format
 
 
@@ -397,7 +475,7 @@ def _write_sheets(sheet_data):
 
 _VALID_CATEGORIES = {
     "food", "grocery", "travel", "housing", "health",
-    "entertainment", "utilities", "shopping", "other",
+    "personal_care", "subscriptions", "entertainment", "utilities", "shopping", "other",
 }
 _VALID_PAYMENTS = {"card", "debit", "cash", "transfer", "upi"}
 
@@ -411,6 +489,11 @@ def _normalise_category(raw):
         "transport": "travel", "transportation": "travel", "cab": "travel",
         "rent": "housing", "home": "housing", "medical": "health",
         "medicine": "health", "pharmacy": "health", "bills": "utilities",
+        "haircut": "personal_care", "salon": "personal_care",
+        "grooming": "personal_care", "cosmetics": "personal_care",
+        "subscription": "subscriptions", "subscriptions_&_software": "subscriptions",
+        "software": "subscriptions", "chatgpt": "subscriptions",
+        "cloud_storage": "subscriptions", "antivirus": "subscriptions",
         "electricity": "utilities", "internet": "utilities",
         "movies": "entertainment", "games": "entertainment",
         "clothes": "shopping", "amazon": "shopping",
@@ -430,6 +513,13 @@ def _normalise_payment(raw):
 
 
 def _normalise_form_date(raw):
+    # Unformatted Google Sheets date cells are numeric serials. Reading the
+    # serial avoids ambiguous locale strings such as 8/1/2026 (Aug 1 vs Jan 8).
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        try:
+            return (date(1899, 12, 30) + timedelta(days=int(raw))).isoformat()
+        except (OverflowError, ValueError):
+            pass
     value = str(raw or "").strip()
     for fmt in (
         "%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%Y/%m/%d",
@@ -474,7 +564,9 @@ def _sync_form_expenses():
         timestamp = datetime.now().isoformat()
         try:
             worksheet = _open_form_worksheet()
-            sheet_rows = worksheet.get_all_values()
+            sheet_rows = worksheet.get_all_values(
+                value_render_option=ValueRenderOption.unformatted
+            )
             if len(sheet_rows) <= 1:
                 _last_sync_result = {"synced": 0, "errors": [], "timestamp": timestamp}
                 return 0, []
@@ -513,10 +605,11 @@ def _sync_form_expenses():
                     amount = float(amount_text)
                     if amount <= 0:
                         raise ValueError("amount must be greater than zero")
+                    raw_expense_date = field(row, "Expense Date", "ExpenseDate")
+                    if not str(raw_expense_date or "").strip():
+                        raw_expense_date = field(row, "Timestamp")
                     item = {
-                        "date": _normalise_form_date(
-                            field(row, "Expense Date", "ExpenseDate", "Timestamp")
-                        ),
+                        "date": _normalise_form_date(raw_expense_date),
                         "description": str(field(row, "Description")).strip() or "Form entry",
                         "category": _normalise_category(field(row, "Category")),
                         "payment": _normalise_payment(field(row, "PaymentMode", "Payment Mode")),
@@ -606,8 +699,8 @@ def save_expenses():
     data = request.get_json(force=True)
     if not isinstance(data, list):
         return jsonify({"error": "Expected array"}), 400
-    account_ids = {
-        int(row["id"]) for row in _read_sheet("Accounts", ACCOUNT_COLS) if row.get("id")
+    accounts = {
+        int(row["id"]): row for row in _read_sheet("Accounts", ACCOUNT_COLS) if row.get("id")
     }
     cleaned = []
     for row in data:
@@ -618,14 +711,79 @@ def save_expenses():
             account_id = int(row.get("accountId"))
         except (TypeError, ValueError):
             return jsonify({"error": "Each expense requires a paying account and numeric amount"}), 400
-        if amount <= 0 or account_id not in account_ids or not row.get("date"):
+        account = accounts.get(account_id)
+        if amount <= 0 or not account or not row.get("date"):
             return jsonify({"error": "Expense requires a date, positive amount, and valid paying account"}), 400
+        if str(account.get("classification") or "asset").lower() == "investment":
+            return jsonify({"error": "Expenses cannot be paid directly from an investment account"}), 400
         cleaned.append({
             **{column: row.get(column) for column in EXPENSE_COLS},
             "amount": amount,
             "accountId": account_id,
         })
     _write_sheet("Expenses", EXPENSE_COLS, cleaned)
+    return jsonify({"ok": True, "count": len(cleaned)})
+
+
+# Income is stored as dated transactions so several sources can credit several accounts.
+INCOME_SOURCES = {
+    "salary", "bonus", "freelance", "business", "interest", "dividend",
+    "rent", "gift", "other",
+}
+
+
+@app.route("/api/income-transactions", methods=["GET"])
+def get_income_transactions():
+    rows = _read_sheet("IncomeTransactions", INCOME_COLS)
+    for row in rows:
+        row["id"] = int(row["id"]) if row.get("id") else 0
+        row["amount"] = float(row["amount"]) if row.get("amount") else 0
+        row["accountId"] = int(row["accountId"]) if row.get("accountId") else None
+        row["source"] = str(row.get("source") or "other").lower()
+    return jsonify(rows)
+
+
+@app.route("/api/income-transactions", methods=["POST"])
+def save_income_transactions():
+    data = request.get_json(force=True)
+    if not isinstance(data, list):
+        return jsonify({"error": "Expected array"}), 400
+    accounts = {
+        int(row["id"]): row for row in _read_sheet("Accounts", ACCOUNT_COLS)
+        if row.get("id")
+    }
+    cleaned = []
+    seen_ids = set()
+    for row in data:
+        if not isinstance(row, dict):
+            return jsonify({"error": "Invalid income transaction"}), 400
+        try:
+            row_id = int(row.get("id"))
+            amount = float(row.get("amount") or 0)
+            account_id = int(row.get("accountId"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "Income requires an id, amount, and credited account"}), 400
+        source = str(row.get("source") or "other").lower()
+        account = accounts.get(account_id)
+        if (row_id in seen_ids or amount <= 0 or not row.get("date") or not account):
+            return jsonify({"error": "Income requires a unique id, date, positive amount, and valid account"}), 400
+        if source not in INCOME_SOURCES:
+            return jsonify({"error": "Invalid income source"}), 400
+        if (str(account.get("classification") or "asset").lower() in {"liability", "investment"}
+                or str(account.get("type") or "").lower() in {
+                    "credit_card", "loan", "demat", "mutual_fund", "gold", "ppf", "nps", "fixed_deposit",
+                }):
+            return jsonify({"error": "Income must credit a bank, cash, or wallet asset account"}), 400
+        seen_ids.add(row_id)
+        cleaned.append({
+            "id": row_id,
+            "date": str(row.get("date"))[:10],
+            "source": source,
+            "description": str(row.get("description") or "").strip()[:160],
+            "amount": amount,
+            "accountId": account_id,
+        })
+    _write_sheet("IncomeTransactions", INCOME_COLS, cleaned)
     return jsonify({"ok": True, "count": len(cleaned)})
 
 
@@ -662,6 +820,7 @@ def get_investments():
         r["buyPrice"] = float(r["buyPrice"]) if r["buyPrice"] else 0
         r["currentPrice"] = float(r["currentPrice"]) if r["currentPrice"] else 0
         r["containerAccountId"] = int(r["containerAccountId"]) if r.get("containerAccountId") else None
+        r["entryMode"] = str(r.get("entryMode") or "connected")
         r["transactions"] = []
 
     inv_map = {r["id"]: r for r in invs}
@@ -674,6 +833,9 @@ def get_investments():
                 "units": float(t["units"]) if t["units"] else 0,
                 "price": float(t["price"]) if t["price"] else 0,
                 "accountId": int(t["accountId"]) if t.get("accountId") else None,
+                "source": str(t.get("source") or "connected"),
+                "settlementDate": str(t.get("settlementDate") or "")[:10],
+                "charges": float(t["charges"]) if t.get("charges") else 0,
             })
 
     return jsonify(invs)
@@ -686,9 +848,13 @@ def save_investments():
         return jsonify({"error": "Expected array"}), 400
 
     account_rows = _read_sheet("Accounts", ACCOUNT_COLS)
-    account_types = {
-        int(row["id"]): str(row.get("type") or "bank_savings")
+    account_map = {
+        int(row["id"]): row
         for row in account_rows if row.get("id")
+    }
+    account_types = {
+        account_id: str(row.get("type") or "bank_savings")
+        for account_id, row in account_map.items()
     }
     category_account_types = {
         "stocks": {"demat"}, "foreign_stocks": {"demat"},
@@ -708,6 +874,10 @@ def save_investments():
             return jsonify({"error": "Investment amounts must be numeric"}), 400
         if min(units, buy_price, current_price) < 0:
             return jsonify({"error": "Investment amounts cannot be negative"}), 400
+        entry_mode = str(inv.get("entryMode") or "connected").lower()
+        if entry_mode not in {"connected", "prior"}:
+            return jsonify({"error": "Invalid investment entry mode"}), 400
+        inv["entryMode"] = entry_mode
         container_id = inv.get("containerAccountId")
         if container_id:
             try:
@@ -724,20 +894,77 @@ def save_investments():
             try:
                 txn_units = float(txn.get("units") or 0)
                 txn_price = float(txn.get("price") or 0)
+                txn_charges = float(txn.get("charges") or 0)
             except (TypeError, ValueError):
-                return jsonify({"error": "Transaction units and price must be numeric"}), 400
+                return jsonify({"error": "Transaction units, price, and charges must be numeric"}), 400
             valid_actions = {
                 "BUY", "SELL", "DEPOSIT", "INTEREST", "WITHDRAWAL", "ADJUSTMENT",
             }
-            if action not in valid_actions or txn_units <= 0 or txn_price < 0:
+            source = str(txn.get("source") or "connected").lower()
+            if source not in {"connected", "opening", "recurring"}:
+                return jsonify({"error": "Invalid investment transaction source"}), 400
+            if (action not in valid_actions or txn_units <= 0 or txn_charges < 0
+                    or (txn_price < 0 and action != "ADJUSTMENT")):
                 return jsonify({"error": "Invalid investment transaction"}), 400
+            transaction_date = str(txn.get("date") or "")[:10]
+            explicit_settlement_date = str(txn.get("settlementDate") or "")[:10]
+            settlement_date = explicit_settlement_date or transaction_date
+            try:
+                datetime.strptime(transaction_date, "%Y-%m-%d")
+                datetime.strptime(settlement_date, "%Y-%m-%d")
+            except ValueError:
+                return jsonify({"error": "Transaction and settlement dates must use YYYY-MM-DD"}), 400
+            if settlement_date < transaction_date:
+                return jsonify({"error": "Settlement date cannot be before the transaction date"}), 400
+            gross_amount = txn_units * txn_price
+            if action in {"SELL", "WITHDRAWAL"} and txn_charges > gross_amount:
+                return jsonify({"error": "Charges cannot exceed sale or withdrawal proceeds"}), 400
+            account_id = None if source == "opening" else txn.get("accountId")
+            if account_id:
+                try:
+                    account_id = int(account_id)
+                except (TypeError, ValueError):
+                    return jsonify({"error": "Invalid transaction account"}), 400
+                if account_id not in account_map:
+                    return jsonify({"error": "Transaction account does not exist"}), 400
+
+            transaction_account = account_map.get(account_id, {})
+            transaction_account_type = str(transaction_account.get("type") or "")
+            transaction_classification = str(transaction_account.get("classification") or "asset").lower()
+            category = str(inv.get("category") or "")
+            container_id = int(inv.get("containerAccountId") or 0)
+            broker_cash_purchase = (
+                action == "BUY" and category in {"stocks", "foreign_stocks"}
+                and account_id == container_id and account_types.get(container_id) == "demat"
+            )
+            if action in {"BUY", "DEPOSIT"} and source != "opening":
+                if (not account_id or transaction_classification == "liability"
+                        or (transaction_classification == "investment" and not broker_cash_purchase)):
+                    return jsonify({"error": "Investment funding must come from a bank/cash asset or available Demat broker cash"}), 400
+            if action == "WITHDRAWAL" and source != "opening":
+                if (not account_id or transaction_classification != "asset"
+                        or transaction_account_type in {"credit_card", "loan"}):
+                    return jsonify({"error": "Investment withdrawal must credit a bank, cash, or wallet asset account"}), 400
+
+            # New settlement-aware sales must follow the account relationship.
+            # Older rows without an explicit settlementDate remain valid.
+            if action == "SELL" and txn.get("settlementDate"):
+                if category == "mutual_funds":
+                    expected_id = int(account_map.get(container_id, {}).get("settlementAccountId") or 0)
+                    if not expected_id or account_id != expected_id:
+                        return jsonify({"error": "Mutual-fund redemption must credit its linked settlement account"}), 400
+                elif category in {"stocks", "foreign_stocks"} and account_id != container_id:
+                    return jsonify({"error": "Stock-sale proceeds must first credit the linked Demat account"}), 400
             txn_rows.append({
                 "investmentId": inv["id"],
-                "date": txn.get("date"),
+                "date": transaction_date,
                 "action": action,
                 "units": txn_units,
                 "price": txn_price,
-                "accountId": txn.get("accountId"),
+                "accountId": account_id,
+                "source": source,
+                "settlementDate": explicit_settlement_date,
+                "charges": txn_charges,
             })
 
     _write_sheets([
@@ -769,8 +996,16 @@ def _parse_month_label(label):
 
 
 def _compute_derived_savings(rows):
-    """Enrich savings-history rows with expenses/invested/emergency/net_saved
-       computed from the Expenses, Transactions, and EFContributions sheets."""
+    """Build monthly summaries from dated income, expense, and investment events."""
+    income_map = {}
+    income_accounts = {}
+    for item in _read_sheet("IncomeTransactions", INCOME_COLS):
+        d = item.get("date") or ""
+        key = d[:7]
+        income_map[key] = income_map.get(key, 0) + (float(item["amount"]) if item["amount"] else 0)
+        if item.get("accountId"):
+            income_accounts.setdefault(key, set()).add(int(item["accountId"]))
+
     # Expenses by YYYY-MM
     exp_map = {}
     for e in _read_sheet("Expenses", EXPENSE_COLS):
@@ -781,7 +1016,8 @@ def _compute_derived_savings(rows):
     # Investment outflows (BUY transactions) by YYYY-MM
     inv_map = {}
     for t in _read_sheet("Transactions", TRANSACTION_COLS):
-        if (t.get("action") or "").upper() in {"BUY", "DEPOSIT"}:
+        if ((t.get("action") or "").upper() in {"BUY", "DEPOSIT"}
+                and str(t.get("source") or "connected").lower() != "opening"):
             d = t.get("date") or ""
             key = d[:7]
             units = float(t["units"]) if t["units"] else 0
@@ -795,21 +1031,46 @@ def _compute_derived_savings(rows):
         key = d[:7]
         ef_map[key] = ef_map.get(key, 0) + (float(c["amount"]) if c["amount"] else 0)
 
+    existing_months = set()
     for r in rows:
         parsed = _parse_month_label(r.get("month"))
         if not parsed:
             continue
         yr, mi = parsed
         ym = f"{yr}-{mi:02d}"
-        income  = float(r["income"]) if r["income"] else 0
+        existing_months.add(ym)
+        income  = income_map.get(ym, 0)
         exp     = exp_map.get(ym, 0)
         inv     = inv_map.get(ym, 0)
         ef      = ef_map.get(ym, 0)
         r["income"]    = income
+        account_ids = income_accounts.get(ym, set())
+        r["accountId"] = next(iter(account_ids)) if len(account_ids) == 1 else None
         r["expenses"]  = exp
         r["invested"]  = inv
         r["emergency"] = ef
         r["net_saved"] = income - exp - inv - ef
+    activity_months = set(income_map) | set(exp_map) | set(inv_map) | set(ef_map)
+    for ym in sorted(activity_months - existing_months):
+        try:
+            year, month = (int(value) for value in ym.split("-"))
+        except (TypeError, ValueError):
+            continue
+        income = income_map.get(ym, 0)
+        exp = exp_map.get(ym, 0)
+        inv = inv_map.get(ym, 0)
+        ef = ef_map.get(ym, 0)
+        account_ids = income_accounts.get(ym, set())
+        rows.append({
+            "month": f"{_MONTH_ABBREVS[month - 1]} {year}",
+            "income": income,
+            "expenses": exp,
+            "invested": inv,
+            "emergency": ef,
+            "net_saved": income - exp - inv - ef,
+            "accountId": next(iter(account_ids)) if len(account_ids) == 1 else None,
+        })
+    rows.sort(key=lambda row: _parse_month_label(row.get("month")) or (0, 0))
     return rows
 
 
@@ -903,20 +1164,137 @@ def get_emergency_fund():
 @app.route("/api/emergency-fund", methods=["POST"])
 def save_emergency_fund():
     data = request.get_json(force=True)
-    # Save target
-    _write_sheet("EmergencyFund", EMERGENCY_COLS, [{"target": data.get("target", 0)}])
-    # Save contributions
+    if not isinstance(data, dict):
+        return jsonify({"error": "Expected object"}), 400
+    try:
+        target = float(data.get("target") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"error": "Emergency target must be numeric"}), 400
+    if not math.isfinite(target):
+        return jsonify({"error": "Emergency target must be a finite number"}), 400
+    if target < 0:
+        return jsonify({"error": "Emergency target cannot be negative"}), 400
     contribs = data.get("contributions", [])
+    if not isinstance(contribs, list):
+        return jsonify({"error": "Emergency contributions must be an array"}), 400
     rows = []
     for c in contribs:
+        if not isinstance(c, dict):
+            return jsonify({"error": "Invalid legacy emergency contribution"}), 400
+        try:
+            contribution_id = int(c.get("id", 0))
+            amount = float(c.get("amount") or 0)
+        except (TypeError, ValueError):
+            return jsonify({"error": "Legacy emergency contribution must be numeric"}), 400
+        if not math.isfinite(amount):
+            return jsonify({"error": "Legacy emergency contribution must be a finite number"}), 400
         rows.append({
-            "id":     c.get("id", 0),
+            "id":     contribution_id,
             "date":   c.get("date", ""),
-            "amount": c.get("amount", 0),
-            "note":   c.get("note", ""),
+            "amount": amount,
+            "note":   str(c.get("note") or "")[:160],
         })
-    _write_sheet("EFContributions", EMERGENCY_CONTRIB_COLS, rows)
+    _write_sheets([
+        ("EmergencyFund", EMERGENCY_COLS, [{"target": target}]),
+        ("EFContributions", EMERGENCY_CONTRIB_COLS, rows),
+    ])
     return jsonify({"ok": True})
+
+
+@app.route("/api/emergency-allocations", methods=["GET"])
+def get_emergency_allocations():
+    rows = _read_sheet("EmergencyAllocations", EMERGENCY_ALLOCATION_COLS)
+    for row in rows:
+        row["id"] = int(row["id"]) if row.get("id") else 0
+        row["sourceId"] = int(row["sourceId"]) if row.get("sourceId") else 0
+        row["amount"] = float(row["amount"] or 0)
+        row["sourceType"] = str(row.get("sourceType") or "")
+        row["allocationMode"] = str(row.get("allocationMode") or "amount")
+        row["liquidity"] = str(row.get("liquidity") or "redeemable")
+        row["note"] = str(row.get("note") or "")
+        row["updatedAt"] = str(row.get("updatedAt") or "")
+    return jsonify(rows)
+
+
+@app.route("/api/emergency-allocations", methods=["POST"])
+def save_emergency_allocations():
+    data = request.get_json(force=True)
+    if not isinstance(data, list):
+        return jsonify({"error": "Expected array"}), 400
+
+    accounts = {
+        int(row["id"]): row for row in _read_sheet("Accounts", ACCOUNT_COLS)
+        if row.get("id")
+    }
+    investments = {
+        int(row["id"]): row for row in _read_sheet("Investments", INVESTMENT_COLS)
+        if row.get("id")
+    }
+    investment_types = {"demat", "mutual_fund", "gold", "ppf", "nps", "fixed_deposit"}
+    cleaned = []
+    seen_ids = set()
+    seen_sources = set()
+    now = datetime.now().isoformat()
+
+    for row in data:
+        if not isinstance(row, dict):
+            return jsonify({"error": "Invalid emergency allocation"}), 400
+        try:
+            row_id = int(row.get("id"))
+            source_id = int(row.get("sourceId"))
+            amount = float(row.get("amount") or 0)
+        except (TypeError, ValueError):
+            return jsonify({"error": "Allocation requires numeric IDs and amount"}), 400
+        source_type = str(row.get("sourceType") or "").lower()
+        allocation_mode = str(row.get("allocationMode") or "amount").lower()
+        liquidity = str(row.get("liquidity") or "").lower()
+        source_key = (source_type, source_id)
+
+        if not math.isfinite(amount):
+            return jsonify({"error": "Allocation amount must be a finite number"}), 400
+        if row_id <= 0 or row_id in seen_ids:
+            return jsonify({"error": "Emergency allocations require unique positive IDs"}), 400
+        if source_type not in {"account", "investment"}:
+            return jsonify({"error": "Allocation source must be an account or investment"}), 400
+        if source_key in seen_sources:
+            return jsonify({"error": "An account or holding can be allocated only once"}), 400
+        if allocation_mode not in {"full", "amount"}:
+            return jsonify({"error": "Allocation mode must be full or amount"}), 400
+        if liquidity not in {"immediate", "redeemable", "locked"}:
+            return jsonify({"error": "Invalid emergency-fund liquidity"}), 400
+        if allocation_mode == "amount" and amount <= 0:
+            return jsonify({"error": "A fixed allocation must be greater than zero"}), 400
+        if amount < 0:
+            return jsonify({"error": "Allocation amount cannot be negative"}), 400
+
+        if source_type == "account":
+            account = accounts.get(source_id)
+            account_type = str((account or {}).get("type") or "").lower()
+            classification = str((account or {}).get("classification") or (
+                "liability" if account_type in {"credit_card", "loan"}
+                else "investment" if account_type in investment_types
+                else "asset"
+            )).lower()
+            if not account or classification != "asset":
+                return jsonify({"error": "Only bank, cash, or wallet assets can fund an emergency reserve"}), 400
+        elif source_id not in investments:
+            return jsonify({"error": "Emergency allocation references a missing investment"}), 400
+
+        seen_ids.add(row_id)
+        seen_sources.add(source_key)
+        cleaned.append({
+            "id": row_id,
+            "sourceType": source_type,
+            "sourceId": source_id,
+            "allocationMode": allocation_mode,
+            "amount": 0 if allocation_mode == "full" else amount,
+            "liquidity": liquidity,
+            "note": str(row.get("note") or "").strip()[:160],
+            "updatedAt": str(row.get("updatedAt") or now)[:32],
+        })
+
+    _write_sheet("EmergencyAllocations", EMERGENCY_ALLOCATION_COLS, cleaned)
+    return jsonify({"ok": True, "count": len(cleaned)})
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -966,6 +1344,16 @@ def save_net_worth():
     return _save_planning_rows("NetWorth", NET_WORTH_COLS)
 
 
+@app.route("/api/net-worth-auto", methods=["GET"])
+def get_automatic_net_worth():
+    return _planning_response("NetWorthAuto", NET_WORTH_AUTO_COLS)
+
+
+@app.route("/api/net-worth-auto", methods=["POST"])
+def save_automatic_net_worth():
+    return _save_planning_rows("NetWorthAuto", NET_WORTH_AUTO_COLS)
+
+
 @app.route("/api/cash-flow", methods=["GET"])
 def get_cash_flow():
     return _planning_response("CashFlow", CASH_FLOW_COLS)
@@ -984,6 +1372,9 @@ def get_accounts():
         row["openingBalance"] = float(row["openingBalance"] or 0)
         row["statementBalance"] = float(row["statementBalance"] or 0)
         row["creditLimit"] = float(row["creditLimit"] or 0)
+        row["settlementAccountId"] = (
+            int(row["settlementAccountId"]) if row.get("settlementAccountId") else None
+        )
         row["type"] = str(row.get("type") or "bank_savings")
         row["classification"] = str(row.get("classification") or (
             "liability" if row["type"] in {"credit_card", "loan"}
@@ -1046,9 +1437,44 @@ def save_accounts():
             "openingBalance": opening,
             "statementBalance": statement,
             "creditLimit": credit_limit,
+            "settlementAccountId": row.get("settlementAccountId") or None,
         })
-    _write_sheet("Accounts", ACCOUNT_COLS, cleaned)
-    return jsonify({"ok": True, "count": len(cleaned)})
+    cleaned_by_id = {int(row["id"]): row for row in cleaned}
+    settlement_types = {"demat", "mutual_fund"}
+    for row in cleaned:
+        raw_settlement_id = row.get("settlementAccountId")
+        if row["type"] not in settlement_types:
+            row["settlementAccountId"] = None
+            continue
+        if not raw_settlement_id:
+            row["settlementAccountId"] = None
+            continue
+        try:
+            settlement_id = int(raw_settlement_id)
+        except (TypeError, ValueError):
+            return jsonify({"error": "Invalid linked settlement account"}), 400
+        settlement_account = cleaned_by_id.get(settlement_id)
+        if (not settlement_account or settlement_id == int(row["id"])
+                or settlement_account["classification"] != "asset"):
+            return jsonify({"error": "Settlement account must be a bank, cash, or wallet asset account"}), 400
+        row["settlementAccountId"] = settlement_id
+    try:
+        _write_sheet("Accounts", ACCOUNT_COLS, cleaned)
+        persisted = _read_sheet("Accounts", ACCOUNT_COLS)
+    except PermissionError:
+        return jsonify({
+            "error": "data.xlsx is locked. Close it in Excel/OneDrive and try again."
+        }), 423
+    except OSError as exc:
+        return jsonify({"error": f"Could not save data.xlsx: {exc}"}), 500
+
+    expected_ids = {str(row["id"]) for row in cleaned}
+    persisted_ids = {str(row.get("id")) for row in persisted}
+    if len(persisted) != len(cleaned) or persisted_ids != expected_ids:
+        return jsonify({
+            "error": "Account save could not be verified in data.xlsx. Please try again."
+        }), 500
+    return jsonify({"ok": True, "count": len(persisted), "verified": True})
 
 
 @app.route("/api/transfers", methods=["GET"])
@@ -1187,7 +1613,9 @@ def save_recurring_rules():
     data = request.get_json(force=True)
     if not isinstance(data, list):
         return jsonify({"error": "Expected array"}), 400
-    account_ids = {int(row["id"]) for row in _read_sheet("Accounts", ACCOUNT_COLS) if row.get("id")}
+    accounts = {
+        int(row["id"]): row for row in _read_sheet("Accounts", ACCOUNT_COLS) if row.get("id")
+    }
     investment_ids = {int(row["id"]) for row in _read_sheet("Investments", INVESTMENT_COLS) if row.get("id")}
     cleaned = []
     for row in data:
@@ -1200,10 +1628,13 @@ def save_recurring_rules():
             return jsonify({"error": "Invalid recurring rule"}), 400
         frequency = str(row.get("frequency") or "monthly").lower()
         if (not str(row.get("name") or "").strip() or day < 1 or day > 31
-                or amount <= 0 or from_id not in account_ids
+                or amount <= 0 or from_id not in accounts
                 or investment_id not in investment_ids
                 or frequency not in {"monthly", "quarterly", "yearly"}):
             return jsonify({"error": "Recurring rule has invalid fields"}), 400
+        funding_account = accounts[from_id]
+        if str(funding_account.get("classification") or "asset").lower() != "asset":
+            return jsonify({"error": "Recurring investments must be funded from a bank, cash, or wallet asset account"}), 400
         cleaned.append({
             "id": rule_id, "name": str(row["name"]).strip(), "type": "sip",
             "frequency": frequency, "day": day, "amount": amount,
@@ -1292,6 +1723,7 @@ def recurring_occurrence_action(occurrence_id):
     transactions.append({
         "investmentId": investment_id, "date": actual_date, "action": action_name,
         "units": txn_units, "price": txn_price, "accountId": int(rule.get("fromAccountId")),
+        "source": "recurring",
     })
     if action_name == "BUY":
         old_units = float(investment.get("units") or 0)
@@ -1310,6 +1742,267 @@ def recurring_occurrence_action(occurrence_id):
     return jsonify({"ok": True, "status": "confirmed"})
 
 
+#  MUTUAL-FUND CATALOGUE & NAV CACHE
+# ═══════════════════════════════════════════════════════════════
+
+MFAPI_BASE_URL = "https://api.mfapi.in"
+
+
+def _market_cache_connection():
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(MARKET_CACHE_FILE), timeout=15)
+    conn.row_factory = sqlite3.Row
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS mf_schemes (
+            scheme_code TEXT PRIMARY KEY,
+            scheme_name TEXT NOT NULL,
+            fund_house TEXT,
+            scheme_type TEXT,
+            scheme_category TEXT,
+            isin_growth TEXT,
+            isin_div_reinvestment TEXT,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_mf_schemes_name
+            ON mf_schemes(scheme_name COLLATE NOCASE);
+        CREATE TABLE IF NOT EXISTS mf_nav_cache (
+            scheme_code TEXT NOT NULL,
+            nav_date TEXT NOT NULL,
+            nav REAL NOT NULL,
+            fetched_at TEXT NOT NULL,
+            PRIMARY KEY (scheme_code, nav_date)
+        );
+        CREATE TABLE IF NOT EXISTS mf_cache_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        );
+    """)
+    return conn
+
+
+def _normalise_mf_scheme(item):
+    if not isinstance(item, dict):
+        return None
+    code = item.get("schemeCode") or item.get("scheme_code")
+    name = item.get("schemeName") or item.get("scheme_name")
+    if code is None or not name:
+        return None
+    return {
+        "schemeCode": str(code).strip(),
+        "schemeName": str(name).strip(),
+        "fundHouse": item.get("fund_house") or item.get("fundHouse"),
+        "schemeType": item.get("scheme_type") or item.get("schemeType"),
+        "schemeCategory": item.get("scheme_category") or item.get("schemeCategory"),
+        "isinGrowth": item.get("isin_growth") or item.get("isinGrowth"),
+        "isinDivReinvestment": (
+            item.get("isin_div_reinvestment") or item.get("isinDivReinvestment")
+        ),
+    }
+
+
+def _upsert_mf_schemes(conn, items):
+    now = datetime.now().isoformat(timespec="seconds")
+    rows = [row for row in (_normalise_mf_scheme(item) for item in items) if row]
+    conn.executemany("""
+        INSERT INTO mf_schemes (
+            scheme_code, scheme_name, fund_house, scheme_type, scheme_category,
+            isin_growth, isin_div_reinvestment, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(scheme_code) DO UPDATE SET
+            scheme_name = excluded.scheme_name,
+            fund_house = COALESCE(excluded.fund_house, mf_schemes.fund_house),
+            scheme_type = COALESCE(excluded.scheme_type, mf_schemes.scheme_type),
+            scheme_category = COALESCE(excluded.scheme_category, mf_schemes.scheme_category),
+            isin_growth = COALESCE(excluded.isin_growth, mf_schemes.isin_growth),
+            isin_div_reinvestment = COALESCE(
+                excluded.isin_div_reinvestment, mf_schemes.isin_div_reinvestment
+            ),
+            updated_at = excluded.updated_at
+    """, [(
+        row["schemeCode"], row["schemeName"], row["fundHouse"], row["schemeType"],
+        row["schemeCategory"], row["isinGrowth"], row["isinDivReinvestment"], now,
+    ) for row in rows])
+    return len(rows)
+
+
+def _mf_catalog_status():
+    with _market_cache_lock:
+        conn = _market_cache_connection()
+        try:
+            count = conn.execute("SELECT COUNT(*) FROM mf_schemes").fetchone()[0]
+            meta = conn.execute(
+                "SELECT value FROM mf_cache_meta WHERE key = 'catalog_refreshed_at'"
+            ).fetchone()
+            return {"count": int(count), "lastRefreshed": meta[0] if meta else None}
+        finally:
+            conn.close()
+
+
+def _refresh_mf_catalog():
+    all_items = []
+    seen_codes = set()
+    limit = 1000
+    offset = 0
+    for _page in range(100):
+        response = requests.get(
+            f"{MFAPI_BASE_URL}/mf", params={"limit": limit, "offset": offset}, timeout=25
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, list):
+            items = payload
+        elif isinstance(payload, dict):
+            items = payload.get("data") or payload.get("schemes") or payload.get("results") or []
+        else:
+            items = []
+        normalised = [row for row in (_normalise_mf_scheme(item) for item in items) if row]
+        new_items = [row for row in normalised if row["schemeCode"] not in seen_codes]
+        all_items.extend(new_items)
+        seen_codes.update(row["schemeCode"] for row in new_items)
+        if not items or len(items) < limit or not new_items:
+            break
+        offset += len(items)
+    if not all_items:
+        raise RuntimeError("MFapi returned no schemes")
+
+    refreshed_at = datetime.now().isoformat(timespec="seconds")
+    with _market_cache_lock:
+        conn = _market_cache_connection()
+        try:
+            _upsert_mf_schemes(conn, all_items)
+            conn.execute("""
+                INSERT INTO mf_cache_meta(key, value) VALUES('catalog_refreshed_at', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """, (refreshed_at,))
+            conn.commit()
+            count = conn.execute("SELECT COUNT(*) FROM mf_schemes").fetchone()[0]
+        finally:
+            conn.close()
+    return {"count": int(count), "updated": len(all_items), "lastRefreshed": refreshed_at}
+
+
+def _search_cached_mf_schemes(query, limit=20):
+    terms = [term.casefold() for term in re.split(r"\s+", query.strip()) if term]
+    if not terms:
+        return []
+    clauses = ["LOWER(scheme_name) LIKE ?" for _ in terms]
+    values = [f"%{term}%" for term in terms]
+    prefix = f"{query.strip().casefold()}%"
+    sql = f"""
+        SELECT scheme_code, scheme_name, fund_house, scheme_type, scheme_category,
+               isin_growth, isin_div_reinvestment
+        FROM mf_schemes
+        WHERE {' AND '.join(clauses)}
+        ORDER BY CASE WHEN LOWER(scheme_name) LIKE ? THEN 0 ELSE 1 END,
+                 scheme_name COLLATE NOCASE
+        LIMIT ?
+    """
+    with _market_cache_lock:
+        conn = _market_cache_connection()
+        try:
+            rows = conn.execute(sql, [*values, prefix, limit]).fetchall()
+        finally:
+            conn.close()
+    return [{
+        "schemeCode": row["scheme_code"], "schemeName": row["scheme_name"],
+        "fundHouse": row["fund_house"], "schemeType": row["scheme_type"],
+        "schemeCategory": row["scheme_category"], "isinGrowth": row["isin_growth"],
+        "isinDivReinvestment": row["isin_div_reinvestment"],
+    } for row in rows]
+
+
+def _fetch_remote_mf_search(query):
+    response = requests.get(
+        f"{MFAPI_BASE_URL}/mf/search", params={"q": query}, timeout=12
+    )
+    response.raise_for_status()
+    payload = response.json()
+    return payload if isinstance(payload, list) else []
+
+
+def _cached_mf_nav(scheme_code):
+    with _market_cache_lock:
+        conn = _market_cache_connection()
+        try:
+            row = conn.execute("""
+                SELECT n.nav, n.nav_date, n.fetched_at, s.scheme_name
+                FROM mf_nav_cache n
+                LEFT JOIN mf_schemes s ON s.scheme_code = n.scheme_code
+                WHERE n.scheme_code = ?
+                ORDER BY n.fetched_at DESC LIMIT 1
+            """, (str(scheme_code),)).fetchone()
+        finally:
+            conn.close()
+    if not row:
+        return None
+    return {
+        "nav": float(row["nav"]), "date": row["nav_date"],
+        "name": row["scheme_name"], "cached": True, "fetchedAt": row["fetched_at"],
+    }
+
+
+def _cache_mf_nav(scheme_code, nav, nav_date, meta=None):
+    fetched_at = datetime.now().isoformat(timespec="seconds")
+    with _market_cache_lock:
+        conn = _market_cache_connection()
+        try:
+            if meta:
+                _upsert_mf_schemes(conn, [{**meta, "schemeCode": scheme_code}])
+            conn.execute("""
+                INSERT INTO mf_nav_cache(scheme_code, nav_date, nav, fetched_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(scheme_code, nav_date) DO UPDATE SET
+                    nav = excluded.nav, fetched_at = excluded.fetched_at
+            """, (str(scheme_code), str(nav_date), float(nav), fetched_at))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+@app.route("/api/mutual-funds/catalog/status")
+def mf_catalog_status():
+    return jsonify(_mf_catalog_status())
+
+
+@app.route("/api/mutual-funds/catalog/refresh", methods=["POST"])
+def refresh_mf_catalog():
+    try:
+        return jsonify({"ok": True, **_refresh_mf_catalog()})
+    except Exception as exc:
+        return jsonify({"error": str(exc), **_mf_catalog_status()}), 502
+
+
+@app.route("/api/mutual-funds/search")
+def search_mf_catalog():
+    query = str(request.args.get("q") or "").strip()
+    if len(query) < 2:
+        return jsonify({"items": [], **_mf_catalog_status()})
+    try:
+        limit = max(5, min(50, int(request.args.get("limit") or 20)))
+    except (TypeError, ValueError):
+        limit = 20
+    items = _search_cached_mf_schemes(query, limit)
+    status = _mf_catalog_status()
+    source = "cache"
+    if not items and status["count"] == 0:
+        try:
+            remote_items = _fetch_remote_mf_search(query)
+            with _market_cache_lock:
+                conn = _market_cache_connection()
+                try:
+                    _upsert_mf_schemes(conn, remote_items)
+                    conn.commit()
+                finally:
+                    conn.close()
+            items = _search_cached_mf_schemes(query, limit)
+            status = _mf_catalog_status()
+            source = "online"
+        except Exception:
+            source = "offline-empty"
+    return jsonify({"items": items, "source": source, **status})
+
+
+# ═══════════════════════════════════════════════════════════════
 #  API: PRICE PROXY  (solves CORS — Python fetches directly)
 # ═══════════════════════════════════════════════════════════════
 
@@ -1338,21 +2031,32 @@ def proxy_stock_price(ticker):
 
 @app.route("/api/price/mf/<scheme_code>")
 def proxy_mf_price(scheme_code):
-    """Proxy mfapi.in for mutual fund NAV."""
-    url = f"https://api.mfapi.in/mf/{scheme_code}"
+    """Return live MFapi NAV, falling back to the last locally cached NAV."""
+    if not re.fullmatch(r"\d{3,12}", str(scheme_code)):
+        return jsonify({"error": "Invalid mutual-fund scheme code"}), 400
     try:
-        resp = requests.get(url, timeout=10)
-        if resp.status_code != 200:
-            return jsonify({"error": f"MFAPI returned {resp.status_code}"}), 502
+        resp = requests.get(f"{MFAPI_BASE_URL}/mf/{scheme_code}/latest", timeout=12)
+        if resp.status_code == 404:
+            resp = requests.get(f"{MFAPI_BASE_URL}/mf/{scheme_code}", timeout=12)
+        resp.raise_for_status()
         data = resp.json()
         nav_entry = (data.get("data") or [{}])[0]
+        nav = float(nav_entry.get("nav") or 0)
+        nav_date = nav_entry.get("date")
+        meta = data.get("meta") or {}
+        if nav <= 0 or not nav_date:
+            raise RuntimeError("MFapi returned no NAV")
+        _cache_mf_nav(scheme_code, nav, nav_date, meta)
         return jsonify({
-            "nav": float(nav_entry.get("nav", 0)),
-            "date": nav_entry.get("date"),
-            "name": data.get("meta", {}).get("scheme_name"),
+            "nav": nav, "date": nav_date,
+            "name": meta.get("scheme_name"), "cached": False,
+            "fetchedAt": datetime.now().isoformat(timespec="seconds"),
         })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 502
+    except Exception as exc:
+        cached = _cached_mf_nav(scheme_code)
+        if cached:
+            return jsonify({**cached, "offline": True, "warning": str(exc)})
+        return jsonify({"error": str(exc)}), 502
 
 
 # ═══════════════════════════════════════════════════════════════

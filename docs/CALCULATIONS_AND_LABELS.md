@@ -166,68 +166,85 @@ It is a present-position value, not monthly income and not lifetime profit.
 The subtitle “Calculated from N active accounts” tells you how many active
 accounts feed the account portion of this value.
 
-### 3.2 Monthly Income
+### 3.2 Reporting period
 
-**Meaning:** income entered for the selected calendar month in
-`SavingsHistory`.
+Dashboard flow cards and period charts share one filter:
 
-```text
-Monthly Income = income value saved for the selected month
-```
+- **Financial year to date:** April 1 of the current Indian financial year
+  through today;
+- **Selected month:** the month in the header navigator;
+- **Calendar year:** January 1 through December 31 of the header year;
+- **All time:** every recorded date; or
+- **Custom range:** inclusive From and To dates.
 
-Clicking the amount lets you create or edit the selected month’s income. An
-active account with Purpose = Salary is required, and the income is assigned to
-that account.
+Net Worth is always an as-of-today position and therefore does not change when
+the flow period changes.
 
-The “vs last month” amount is:
+### 3.3 Income Received
 
-```text
-Selected month income - previous month income
-```
-
-Why it is necessary: monthly income is the denominator for savings,
-investment, and spending rates.
-
-Important: income is currently stored as one monthly amount. In the account
-ledger it is represented on the first day of that month even if salary was
-actually credited on the 28th–31st.
-
-### 3.3 Monthly Expenses
-
-**Meaning:** sum of expense records dated within the selected month.
+Income is a dated transaction stored in `IncomeTransactions`:
 
 ```text
-Monthly Expenses = Σ expense amount for selected YYYY-MM
+Income Received = Σ income amount where start date ≤ credit date ≤ end date
 ```
 
-The percentage comparison is:
+Every row has a source, description, amount, and receiving account. Adding the
+row credits that account on the actual received date. Sources include salary,
+bonus, freelance, business, interest, dividend, rent, gift, and other income.
+
+Example:
 
 ```text
-Expense change %
-= (selected month expenses - previous month expenses)
-  ÷ previous month expenses × 100
+31 Jul 2026  Salary      Axis Salary       ₹2,34,256.22
+15 Aug 2026  Freelance   Axis Salary         ₹15,000.00
+FY-to-date Income Received                  ₹2,49,256.22
 ```
 
-If the previous month is zero, the displayed change defaults to 0.0%.
+Existing legacy monthly income is migrated once to a salary transaction dated
+on the last calendar day of its month. This matches the common 28th–31st salary
+credit pattern and prevents double counting.
+
+Why it is necessary: multiple sources and receiving accounts cannot be
+reconciled accurately using one manually typed monthly total.
+
+### 3.4 Expenses
+
+**Meaning:** sum of expense records dated within the selected Dashboard period.
+
+```text
+Expenses = Σ expense amount where start date ≤ expense date ≤ end date
+```
+
+The subtitle shows `Expenses ÷ Income Received × 100` when income is positive.
 
 Why it is necessary: this is actual recorded spending, not a budget or
 forecast.
 
-### 3.4 Net Savings
+### 3.5 Invested and Available Surplus
 
-**Meaning:** the selected month’s income not used by recorded outflows.
+**Invested** is cash contributed during the selected period:
 
 ```text
-Net Savings
-= Monthly Income
-- Monthly Expenses
+Invested
+= Σ connected or recurring BUY and DEPOSIT transaction amounts in the period
+```
+
+Transactions whose source is `opening` are excluded. Their value belongs in
+Net Worth, but they are not new contributions made during the reporting period.
+
+**Available Surplus** is period income not used by recorded outflows:
+
+```text
+Available Surplus
+= Income Received
+- Expenses
 - Investment BUY and DEPOSIT amounts
 - Emergency-fund contributions
 ```
 
 ```text
-Savings Rate % = Net Savings ÷ Monthly Income × 100
-Investment Rate % = Investment BUY/DEPOSIT amount ÷ Monthly Income × 100
+Surplus Rate % = Available Surplus ÷ Income Received × 100
+Investment Rate % = Invested ÷ Income Received × 100
 ```
 
 Example:
@@ -237,8 +254,8 @@ Income                  ₹1,00,000
 Expenses                  ₹40,000
 Investments               ₹30,000
 Emergency contribution     ₹5,000
-Net Savings               ₹25,000
-Savings Rate                  25%
+Available Surplus          ₹25,000
+Surplus Rate                  25%
 Investment Rate               30%
 ```
 
@@ -246,10 +263,10 @@ Why it is necessary: an investment is not an expense, but it still uses cash
 from the month’s income. Subtracting it here distinguishes money still
 unallocated from money deliberately invested.
 
-Negative Net Savings means recorded outflows exceeded recorded income for the
+Negative Available Surplus means recorded outflows exceeded recorded income for the
 month. This can be valid if earlier savings funded the difference.
 
-### 3.5 Action items
+### 3.6 Action items
 
 **Meaning:** number of generated recurring-investment occurrences whose status
 is `pending`.
@@ -265,20 +282,17 @@ Why it is necessary: recurring rules are expectations, not real transactions.
 Review prevents an expected SIP from changing balances when the debit did not
 actually happen.
 
-### 3.6 Your monthly financial direction
+### 3.7 Your financial direction
 
-This sentence combines:
-
-- the selected month’s Savings Rate;
-- the percentage by which spending is higher or lower than the previous month;
-  and
-- the number of active accounts feeding FinTrack.
+This sentence states what percentage of period income remains after recorded
+expenses and investments. When the result is negative it explains that earlier
+balances or missing income funded the difference.
 
 It is a summary of entered data, not financial advice.
 
-### 3.7 Income Breakdown
+### 3.8 Money Allocation
 
-The doughnut divides the selected month into:
+The doughnut divides the selected Dashboard period into:
 
 - each expense category;
 - Investments: BUY and DEPOSIT transactions;
@@ -300,25 +314,49 @@ more than 100% of income.
 Why it is necessary: it shows where the selected month’s income was directed,
 not merely where expenses were spent.
 
-### 3.8 Savings Rate Trend
+### 3.9 Income Sources
 
-For each saved income month within the last 12 months ending at the selected
-month:
+The doughnut groups dated credits by their `source` field:
 
 ```text
-Monthly Savings Rate
-= (income - expenses - investments - emergency contributions)
-  ÷ income × 100
+Source total = Σ income credits with that source in the selected period
 ```
 
-Months without a saved income row are omitted.
+Why it is necessary: salary, freelance work, interest, dividends, and other
+sources can be understood independently without losing the receiving-account
+trail.
 
-Why it is necessary: one month can be unusual; the trend shows whether retained
-income is improving or declining.
+### 3.10 Monthly Money Flow
 
-### 3.9 Net-Worth History
+For each of the last 12 calendar months ending at the header-selected month,
+the grouped chart shows Income, Expenses, and Invested. A line shows:
 
-This chart uses saved rows from the legacy `NetWorth` worksheet:
+```text
+Monthly Surplus = Income - Expenses - Invested - Emergency contributions
+```
+
+Months with no activity remain visible as zero, which prevents gaps from making
+the trend look better than it is.
+
+### 3.11 Expense Categories
+
+This horizontal bar chart ranks expense categories in the Dashboard period:
+
+```text
+Category spend = Σ expenses in category and date range
+```
+
+Clicking a bar opens the Expenses section with that category selected.
+
+### 3.12 Net-Worth History
+
+This chart merges monthly rows from two worksheets:
+
+- `NetWorthAuto` contains the current-month snapshot calculated automatically
+  from live accounts, liabilities, and holdings;
+- `NetWorth` contains optional manual history and overrides.
+
+If both worksheets contain the same month, the manual `NetWorth` row wins.
 
 ```text
 Snapshot assets
@@ -330,22 +368,26 @@ Snapshot liabilities
 Snapshot net worth = snapshot assets - snapshot liabilities
 ```
 
-This is different from the Dashboard Net Worth card:
+The Dashboard Net Worth card is always live. The current automatic snapshot is
+updated when FinTrack loads and when recorded balances change. When the month
+changes, the previous monthly row remains as history and a new current-month
+row begins.
 
-- the card is calculated live from accounts and holdings;
-- the chart uses manually saved historical snapshots.
+Why it is necessary: saving the observed value each month creates a genuine
+growth series. Today’s account balances cannot reconstruct what every asset
+was worth in an earlier month.
 
-Why it is necessary: today’s account balances cannot reconstruct what every
-asset was worth in an earlier month.
+The chart displays Assets, Liabilities, and Net Worth as separate series.
 
-### 3.10 Recent Transactions
+### 3.13 Recent Income and Expenses
 
-Shows up to five expense records from the selected month, most recently added
-first. Each row displays description, date, category, and negative amount.
+Shows up to seven dated income and expense records from the Dashboard period,
+newest first. Income is positive and includes its receiving account; expenses
+are negative and include their category.
 
 Why it is necessary: it provides a quick check of the latest recorded spending.
 
-### 3.11 Investment Snapshot
+### 3.14 Investment Snapshot
 
 Shows up to the first five stored holdings with:
 
@@ -369,7 +411,7 @@ unrealised movement without opening the full Investments section.
 | Date | Actual payment date; determines month and ledger order | Places spending in the correct reporting period |
 | Amount | Positive amount spent | Drives expense totals and debits the selected account |
 | Description | Merchant or purpose | Makes the transaction identifiable |
-| Category | Food, Grocery, Travel, Housing, Health, Entertainment, Utilities, Shopping, or Other | Drives category charts and analysis |
+| Category | Food & Takeaway, Grocery, Travel, Housing, Health, Personal Care, Subscriptions & Software, Entertainment, Utilities, Shopping, or Other | Drives category charts and analysis |
 | Payment Method | UPI, credit card, debit card, cash, or bank transfer | Describes the payment rail; it does not choose the account |
 | Paid From Account | Account whose balance is affected | Connects spending to the account ledger |
 
@@ -582,17 +624,18 @@ not exchange-traded units.
 | Label | Meaning |
 |---|---|
 | Investment Type | Selects calculation type and compatible investment account |
+| How should this investment enter FinTrack? | Chooses a connected purchase/deposit or a prior opening position |
 | Asset Ticker / Code | Short identifier such as RELIANCE or a fund code |
 | Asset Name | Human-readable company, scheme, or deposit name |
-| MF Scheme Code | Code used to request the latest NAV from mfapi.in |
+| Find Mutual Fund Scheme | Searches the local catalogue by fund/AMC/plan/option and stores the selected MFapi scheme code automatically |
 | Market Cap | Descriptive classification for market investments |
 | Risk Level | User-selected descriptive risk label |
 | Units / Shares | Quantity initially acquired |
-| Buy Price | Initial price or NAV per unit |
+| Buy Price / Average Cost | Purchase price for a new transaction or remaining average cost for a prior position |
 | Current Price | Latest stored price or NAV per unit |
-| Purchase Date | Date of the initial transaction |
+| Purchase Date / Position As Of Date | Transaction date for a new purchase or cutover date for a prior position |
 | Investment Account | MF, Demat, PPF, NPS, gold, or FD account that contains the holding |
-| Paid From Account | Bank/cash account that funded the purchase |
+| Paid From Account | Bank/cash account funding a new purchase; hidden for a prior position |
 
 Initial unit-based investment:
 
@@ -603,7 +646,54 @@ Initial purchase amount = units × buy price
 That amount reduces the funding account. The holding’s current value is counted
 inside the selected investment account.
 
-### 5.5 Summary cards
+### 5.5 Prior investments / opening positions
+
+Use **Prior investment / opening position** for a holding that existed before
+the user began connected account tracking.
+
+For a unit-based holding, enter:
+
+- units currently held;
+- remaining average cost per unit;
+- current price/NAV; and
+- the date on which this becomes the FinTrack opening position.
+
+```text
+Opening cost basis = current units × remaining average cost
+Opening current value = current units × current price
+Funding-account effect = ₹0
+Monthly invested effect = ₹0
+```
+
+For an existing PPF or FD, enter:
+
+- principal/remaining cost basis;
+- current statement balance; and
+- the position as-of date.
+
+FinTrack stores the principal and any difference required to establish the
+opening current balance as explicit opening-position records. For PPF, a
+positive difference is opening accumulated interest. For FD, the difference
+remains an opening-value adjustment unless interest is explicitly credited.
+Neither record debits a bank account.
+
+```text
+Opening principal = entered principal/cost basis
+PPF opening accumulated interest = current balance - opening principal
+Opening current balance = principal + opening interest/value adjustment
+```
+
+Opening-position transactions carry `source = opening`, appear clearly in the
+holding and investment-account history, and never count as the selected
+month's new investment outflow. Later BUY, SELL, DEPOSIT, INTEREST, and
+WITHDRAWAL transactions use normal connected accounts.
+
+Why it is necessary: historical holdings establish what the user already owns;
+they are not purchases made from today's bank balance. This avoids fake bank
+offsets and prevents historical contributions from distorting current-month
+savings.
+
+### 5.6 Summary cards
 
 **Total Invested**
 
@@ -642,7 +732,7 @@ Why these labels are necessary: cost answers how much principal remains
 invested; value answers what it is worth now; gain and return show the
 difference in rupees and percentage.
 
-### 5.6 Portfolio Allocation
+### 5.7 Portfolio Allocation
 
 ```text
 Category allocation value = Σ current values in that investment category
@@ -651,7 +741,7 @@ Category allocation value = Σ current values in that investment category
 Why it is necessary: it shows concentration across stocks, mutual funds, gold,
 PPF, NPS, and FD.
 
-### 5.7 Holdings Value chart
+### 5.8 Holdings Value chart
 
 For each month-end in the 12 months ending at the selected month, transactions
 up to that date determine units and cost basis.
@@ -661,7 +751,7 @@ stored* price. The chart does not fetch historical market prices or historical
 NAVs. Therefore it is a position/cost history comparison, not a true historical
 market-value chart.
 
-### 5.8 Stocks & Mutual Funds and Other Investments tiles
+### 5.9 Stocks & Mutual Funds and Other Investments tiles
 
 Each tile shows:
 
@@ -674,7 +764,7 @@ Holdings = number of stored holding records
 
 Category pills show current value for each category inside the tile.
 
-### 5.9 Holding table labels
+### 5.10 Holding table labels
 
 | Label | Calculation |
 |---|---|
@@ -695,7 +785,7 @@ Transaction Total = units × transaction price
 It also shows total bought units/cost, sold units/revenue, realised P&L, and net
 units held.
 
-### 5.10 Buy More and Sell
+### 5.11 Buy More and Sell
 
 **Buy More** adds a dated BUY transaction:
 
@@ -705,17 +795,60 @@ Funding account effect = -purchase amount
 Holding units and cost basis increase
 ```
 
-**Sell** adds a dated SELL transaction:
+**Sell / Redeem** adds a dated SELL transaction. Gross and net proceeds are
+kept separate:
 
 ```text
-Sale proceeds = units × price
-Receiving account effect = +sale proceeds
+Gross proceeds = units × sale price or applicable NAV
+Net proceeds = gross proceeds - charges / exit load / taxes
+Realised P&L = net proceeds - moving-average cost removed
 Holding units and cost basis decrease using moving-average cost
 ```
 
-FinTrack prevents selling more units than are currently held.
+For a mutual fund, the net proceeds credit the bank linked to the MF account on
+the entered Bank Credit Date. A user can redeem by units or by amount. When an
+amount is entered, `units redeemed = amount ÷ applicable NAV`.
 
-### 5.11 Current price and NAV
+For stocks, the net proceeds first credit the linked Demat / Brokerage account
+as broker cash on the settlement date. They do not immediately appear in the
+bank account. **Withdraw broker cash** prepares an internal transfer from the
+Demat account to its linked settlement bank. Broker cash can also fund a later
+purchase without a false bank movement.
+
+FinTrack prevents selling more units than are currently held, prevents charges
+from exceeding proceeds, and prevents withdrawing or reinvesting more broker
+cash than is available.
+
+### 5.12 Linked settlement account and broker cash
+
+Demat and mutual-fund accounts can store one **Linked Settlement Account**.
+This is normally the registered bank account used by the broker, Demat account,
+or mutual-fund folio. It is an account relationship only; linking it does not
+move money.
+
+```text
+MF redemption: MF holding → linked bank
+Stock sale: stock holding → Demat broker cash
+Broker withdrawal: Demat broker cash → linked bank (internal transfer)
+```
+
+Broker cash is derived from the Demat cash ledger:
+
+```text
+Broker cash
+= Demat starting cash
++ transfers into Demat
++ net stock-sale proceeds assigned to Demat
+- purchases funded from Demat
+- transfers withdrawn from Demat
++ reconciliation adjustments
+```
+
+Why it is necessary: stock-sale proceeds may remain available with the broker
+and be reinvested without ever reaching the bank, while mutual-fund redemption
+proceeds normally credit the registered bank directly.
+
+### 5.13 Current price and NAV
 
 Price refresh updates the holding’s current stored price:
 
@@ -726,11 +859,33 @@ Price refresh updates the holding’s current stored price:
 Current price affects valuation and unrealised gain. It does not create a cash
 transaction.
 
+### 5.14 Offline mutual-fund catalogue
+
+The mutual-fund picker searches scheme metadata stored in the local SQLite
+cache at `cache/market_data.sqlite`. The cache contains identifiers and names,
+not every scheme's complete NAV history, and therefore does not enlarge the
+user's `data.xlsx` workbook.
+
+- On an empty cache, FinTrack attempts a background catalogue download.
+- **Refresh catalogue** explicitly updates the cache when internet is available.
+- Offline searches use the last successfully downloaded catalogue.
+- Selecting a scheme fills its name/code and requests the latest NAV.
+- A successful NAV response is cached with its NAV date.
+- If that request later fails, the saved NAV is returned with an offline status.
+- With no matching cached scheme, manual fund name, units, cost NAV, and current
+  NAV remain available; the scheme can be verified later.
+
+Why it is necessary: internet availability should affect price freshness, not
+the ability to record or inspect the user's own financial transactions.
+
 ## 6. Income and Flow
 
 ### 6.1 This Month Income
 
-Same monthly income used by the Dashboard.
+Sum of `IncomeTransactions` whose credit date falls in the header-selected
+month. Use **Add Income** to record another source. The Income Transactions
+table provides the audit trail and allows an incorrect credit to be deleted;
+deletion also removes it from the receiving account balance.
 
 ### 6.2 This Month Expenses
 
@@ -780,7 +935,7 @@ income changes.
 | Column | Calculation |
 |---|---|
 | Month | Month stored in `SavingsHistory` |
-| Income | User-entered monthly income |
+| Income | Sum of dated income credits in the month |
 | Expenses | Sum of actual expense entries for the month |
 | Invested | Sum of BUY and DEPOSIT amounts for the month |
 | Emergency | Sum of legacy emergency-fund contributions for the month |
@@ -788,11 +943,12 @@ income changes.
 | Savings Rate | Net Saved ÷ Income × 100 |
 | Invest Rate | Invested ÷ Income × 100 |
 
-Income is editable from the table. The other calculated columns come from their
-underlying transactions.
+Every column is derived from its underlying dated transactions. `SavingsHistory`
+is retained as the monthly summary layer, not as a second editable income
+source.
 
-Why it is necessary: editing one source value should recalculate the whole
-month rather than storing multiple inconsistent copies.
+Why it is necessary: one source of truth prevents a monthly total and its
+account credits from disagreeing.
 
 ## 7. Accounts
 
@@ -857,7 +1013,7 @@ FinTrack balance
 - transfers sent
 + transfers received
 - funded BUY/DEPOSIT transactions
-+ received SELL/WITHDRAWAL transactions
++ net received SELL/WITHDRAWAL transactions on their settlement/credit date
 + reconciliation adjustments
 ```
 
@@ -903,6 +1059,56 @@ Displayed gap            ₹3,99,371.78
 This suggests that an opening balance or an old inflow is missing. It does not
 automatically mean the difference is income.
 
+### 7.6 Emergency Reserve
+
+The Emergency Reserve card designates part or all of assets already recorded in
+FinTrack. It does not create an account, transfer money, add an investment
+transaction, or change net worth.
+
+| Label | Calculation and purpose |
+|---|---|
+| Usable Reserve | **Available Now + Needs Redemption**; this is the amount used for progress and coverage |
+| Target | Desired usable reserve entered by the user |
+| Target Gap | `max(0, Target - Usable Reserve)` |
+| Available Now | Effective allocations that can be spent immediately, normally bank, cash, or wallet balances |
+| Needs Redemption | Effective allocations that require a withdrawal or sale, such as an FD or mutual fund |
+| Locked / Excluded | Designated value shown for context but excluded from the target, such as restricted PPF/NPS value |
+| Allocate Asset | Links an existing account or holding to the emergency purpose without changing that asset |
+
+For every allocation:
+
+```text
+Source Value = current FinTrack balance, for an account
+Source Value = units × current price/NAV, for a holding
+
+Requested Allocation = Source Value, for Entire current value mode
+Requested Allocation = entered amount, for Fixed amount mode
+
+Effective Allocation = min(Requested Allocation, Source Value)
+```
+
+**Entire current value** follows future balance or market-value changes.
+**Fixed amount** keeps the requested amount constant, but cannot claim more than
+the asset currently contains. Each account or holding can be allocated only
+once, preventing duplicate designation of the same value.
+
+```text
+Usable Reserve = Σ Available Now + Σ Needs Redemption
+Target Gap = max(0, Target - Usable Reserve)
+Progress % = min(100, Usable Reserve ÷ Target × 100)
+Coverage Months = Usable Reserve ÷ average essential monthly expenses
+```
+
+Essential monthly expenses are the average of Food, Grocery, Travel, Housing,
+Health, and Utilities over the latest three months relative to the selected
+month. If that average is zero, coverage displays **Not set**.
+
+Legacy `EFContributions` rows remain in historical monthly allocation and
+savings calculations for compatibility. Their accumulated balance is not added
+to the live Emergency Reserve; allocate the real account or holding that
+contains the money instead. This prevents the same wealth from being counted
+twice.
+
 ## 8. Internal transfers
 
 ### 8.1 Fields
@@ -935,6 +1141,18 @@ Credit-card amount owed: -₹10,000
 Why it is necessary: one transfer entry keeps both account ledgers synchronized
 and avoids separately entering a debit and credit.
 
+### 8.2 Period filter
+
+The Internal Transfers tile can show transfers for:
+
+- **Selected month:** the month and year in the header navigator;
+- **Calendar year:** January through December of the header year; or
+- **Financial year:** 1 April through 31 March containing the selected month.
+
+All matching transfers are sorted newest first inside the fixed-height,
+scrollable list. Changing this filter affects display only; it never changes
+account balances or transfer records.
+
 ## 9. Account ledger
 
 ### 9.1 Account selector
@@ -950,10 +1168,11 @@ Chooses which account’s linked activity is displayed.
 
 ### 9.3 Transaction type filter
 
-- **Income:** monthly income entries.
+- **Income:** individual dated income credits.
 - **Expenses:** expense records.
 - **Transfers:** transfer in and transfer out.
 - **Investments:** purchases, deposits, sales, withdrawals, and interest.
+- **Opening positions:** prior holdings introduced without a funding-account movement.
 - **Adjustments:** account reconciliation corrections.
 
 ### 9.4 Sort and search
@@ -1177,17 +1396,21 @@ actual transaction date as the 7th and enter the NAV/units allotted for the
 
 | Worksheet | Main responsibility |
 |---|---|
-| Accounts | Account setup, starting position, current bank/card comparison |
+| Accounts | Account setup, starting position, current bank/card comparison, and MF/Demat settlement-bank link |
+| IncomeTransactions | Dated income source, description, amount, and receiving account |
 | Transfers | Two-sided internal account movements |
 | ReconciliationAdjustments | Dated signed corrections with reasons and creation time |
 | Expenses | Expense records and paying account |
 | Investments | Holding identity, category, current price, and investment account |
-| Transactions | BUY, SELL, DEPOSIT, INTEREST, WITHDRAWAL, and investment ADJUSTMENT history |
-| SavingsHistory | Monthly income and assigned salary account |
+| Transactions | BUY, SELL, DEPOSIT, INTEREST, WITHDRAWAL, and investment ADJUSTMENT history, including source, settlement date, and charges |
+| SavingsHistory | Derived monthly income, expense, investment, emergency, and surplus summary |
 | RecurringRules | SIP/deposit schedule definitions |
 | RecurringOccurrences | Pending, confirmed, and skipped scheduled events |
-| EmergencyFund / EFContributions | Legacy emergency-fund data |
-| NetWorth | Legacy monthly net-worth snapshots |
+| EmergencyFund | Emergency-reserve target |
+| EmergencyAllocations | Links existing accounts/holdings to a full or fixed emergency amount and its liquidity |
+| EFContributions | Historical emergency contributions retained for compatibility; not part of live reserve value |
+| NetWorth | Optional manual monthly net-worth history and overrides |
+| NetWorthAuto | Automatically captured monthly account-based net worth |
 | Budgets / RecurringBills / CashFlow | Legacy planning data retained for compatibility |
 
 Why separate worksheets are necessary: an account is a long-lived entity,
@@ -1289,16 +1512,15 @@ The ₹2,000 increase is investment value movement, not salary or a transfer.
 
 These are current implementation details that matter when interpreting values:
 
-1. Income is stored monthly, not as individual dated salary credits. The
-   account ledger places monthly income on the first day of the month.
-2. Dashboard Net Worth is live and account-based, but Net-Worth History uses
-   separate legacy snapshots.
-3. The Holdings Value chart filters transactions historically but values those
+1. Dashboard Net Worth is live and account-based. Net-Worth History records one
+   automatic observation per month; it cannot recreate months from before the
+   automatic snapshots existed without manual history.
+2. The Holdings Value chart filters transactions historically but values those
    historical units using the currently stored price; it is not true historical
    valuation.
-4. Current mutual-fund NAV can be refreshed, but recurring confirmation does
+3. Current mutual-fund NAV can be refreshed, but recurring confirmation does
    not yet automatically retrieve historical NAV for the due date.
-5. Current bank/card balance is manually entered. FinTrack does not connect to
+4. Current bank/card balance is manually entered. FinTrack does not connect to
    a bank statement feed.
 6. The displayed Unexplained Gap is absolute. The Review Account Balance dialog
    identifies whether FinTrack is lower or higher.
@@ -1306,9 +1528,9 @@ These are current implementation details that matter when interpreting values:
    made. Sold or withdrawn cost is removed.
 8. Realised sale gains are shown in a holding’s transaction summary but are not
    added to the investment headline Total Gain/Loss.
-9. Legacy budget, recurring-bill, emergency-fund, net-worth snapshot, and
-   cash-flow worksheets remain supported, but their input panels are hidden in
-   the account-centered interface.
+9. Legacy budget, recurring-bill, emergency-contribution, net-worth snapshot,
+   and cash-flow worksheets remain supported. Their old input panels are hidden;
+   the asset-linked Emergency Reserve is available in Accounts.
 10. The current bank/card comparison does not yet store a separate “balance as
     of” date. Update it when performing a reconciliation so it represents the
     latest balance being compared.

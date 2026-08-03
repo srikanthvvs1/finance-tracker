@@ -21,17 +21,18 @@ worked examples, account sign rules, and reconciliation behavior, read
 1. [What FinTrack helps you answer](#what-fintrack-helps-you-answer)
 2. [Installation and startup](#installation-and-startup)
 3. [How data is stored](#how-data-is-stored)
-4. [Dashboard](#dashboard)
-5. [Expenses](#expenses)
-6. [Investments](#investments)
-7. [Savings](#savings)
-8. [Financial Plan](#financial-plan)
-9. [Documents](#documents)
-10. [Google Sheets expense sync](#google-sheets-expense-sync)
-11. [Financial glossary](#financial-glossary)
-12. [Calculations](#calculations)
-13. [Project structure](#project-structure)
-14. [Troubleshooting](#troubleshooting)
+4. [Transaction routing model](#transaction-routing-model)
+5. [Dashboard](#dashboard)
+6. [Expenses](#expenses)
+7. [Investments](#investments)
+8. [Savings](#savings)
+9. [Accounts](#accounts)
+10. [Documents](#documents)
+11. [Google Sheets expense sync](#google-sheets-expense-sync)
+12. [Financial glossary](#financial-glossary)
+13. [Calculations](#calculations)
+14. [Project structure](#project-structure)
+15. [Troubleshooting](#troubleshooting)
 
 ## What FinTrack helps you answer
 
@@ -43,8 +44,9 @@ FinTrack is designed to answer five practical questions:
 - What bills and commitments are still coming?
 - Is my net worth moving in the right direction?
 
-The header month selector controls the month used by the dashboard, expenses,
-savings, budgets, snapshots, and forecasts.
+The header month selector controls month-based expense, savings, budget,
+snapshot, and forecast views. The Dashboard has its own reporting-period
+selector and defaults to the Indian financial year to date (April–March).
 
 ## Installation and startup
 
@@ -73,8 +75,19 @@ python -m pip install -r requirements.txt
 ### Start FinTrack
 
 ```powershell
-python3 .\server.py
+.\start_server.cmd
 ```
+
+The start script runs one hidden server, records its verified PID, and exits
+with an error if port 5000 already has a listener. Stop that managed server
+with:
+
+```powershell
+.\stop_server.cmd
+```
+
+Server output is written under `logs/`; runtime PID state is stored under
+`.runtime/`. Both folders are excluded from Git.
 
 Then open:
 
@@ -94,12 +107,15 @@ FinTrack uses one canonical server: `server.py`.
 |---|---|
 | Expenses | `data.xlsx` → `Expenses` |
 | Investments | `data.xlsx` → `Investments` and `Transactions` |
-| Income and savings history | `data.xlsx` → `SavingsHistory` |
+| Dated income credits and their receiving accounts | `data.xlsx` → `IncomeTransactions` |
+| Derived monthly savings summaries | `data.xlsx` → `SavingsHistory` |
 | Savings goals | `data.xlsx` → `SavingsGoals` |
-| Emergency fund | `data.xlsx` → `EmergencyFund` and `EFContributions` |
+| Emergency reserve target and asset designations | `data.xlsx` → `EmergencyFund` and `EmergencyAllocations` |
+| Historical emergency contributions | `data.xlsx` → `EFContributions` (preserved for compatibility) |
 | Monthly budgets | `data.xlsx` → `Budgets` |
 | Recurring bills | `data.xlsx` → `RecurringBills` |
-| Net-worth snapshots | `data.xlsx` → `NetWorth` |
+| Automatic net-worth snapshots | `data.xlsx` → `NetWorthAuto` |
+| Manual net-worth history and overrides | `data.xlsx` → `NetWorth` |
 | Cash-flow settings | `data.xlsx` → `CashFlow` |
 | Account labels and reconciliation balances | `data.xlsx` → `Accounts` |
 | Internal account transfers | `data.xlsx` → `Transfers` |
@@ -114,20 +130,125 @@ saving data, because Windows or OneDrive may temporarily lock the file.
 
 Use **Export Excel** in the sidebar to download a copy of the workbook.
 
+## Transaction routing model
+
+FinTrack uses double-sided routing wherever money moves between two accounts.
+Every normal transaction has a dated source, destination, or both; reports are
+then derived from those same records. This keeps the account ledger, investment
+holding, dashboard totals, and net worth connected.
+
+| Action | Source / debit | Destination / credit | Reporting effect |
+|---|---|---|---|
+| Income or salary | External payer | Selected bank, cash, or wallet account | Increases income and that account balance |
+| Expense paid from an asset | Selected bank, cash, or wallet account | Merchant / external payee | Decreases the account and increases expenses |
+| Credit-card purchase | Credit-card account | Merchant / external payee | Increases the amount owed and increases expenses |
+| Internal transfer | Selected source account | Selected destination account | Changes both balances; never counts as income or expense |
+| MF, stock, gold, NPS, PPF, or FD purchase/deposit | Funding bank/cash account, or available Demat broker cash | Compatible investment account and holding | Decreases funding cash and increases investment cost/value |
+| Prior investment / opening position | No funding account | Investment account and holding only | Establishes history without a bank debit or current-period investment outflow |
+| Mutual-fund redemption | Mutual-fund holding | MF account's linked settlement bank | Reduces units on the redemption date and credits net proceeds on the bank-credit date |
+| Stock sale | Stock holding | Demat broker cash | Reduces shares on the trade date and adds net broker cash on the settlement date |
+| Broker-cash withdrawal | Demat broker cash | Demat account's linked settlement bank | Internal transfer only; does not count as income |
+| PPF / FD interest | Institution | PPF / FD balance | Increases investment value; does not debit a bank or count as a new deposit |
+| PPF / FD withdrawal | PPF / FD balance | Selected bank, cash, or wallet account | Decreases the investment balance and credits the receiving account |
+| Reconciliation adjustment | Explicit balance correction | Selected account | Corrects only that account; not income, spending, or investment activity |
+
+### The account chain
+
+A practical connected setup looks like this:
+
+```text
+Salary payer -> Salary bank
+Salary bank -> Spending bank                 (internal transfer)
+Salary bank -> Investment bank               (internal transfer)
+Spending bank -> Merchant                    (expense)
+Investment bank -> Mutual Fund account       (BUY / SIP)
+Investment bank -> Demat account + holding   (stock BUY)
+Investment bank -> PPF or FD account         (DEPOSIT)
+Mutual Fund account -> Linked bank           (redemption)
+Stock holding -> Demat broker cash -> Linked bank
+```
+
+Create separate accounts for each real place money or value is held: banks,
+cash, cards, brokerage/Demat, mutual-fund platform, PPF, NPS, and each FD that
+needs its own balance history. Multiple schemes may share one mutual-fund
+platform account; each scheme remains a separate holding. Multiple stocks may
+likewise share one Demat account.
+
+Mutual Fund and Demat accounts each store one linked settlement bank. Link them
+to the bank actually registered with the platform. FinTrack prevents a new MF
+redemption from being routed to a different bank and prevents a stock sale from
+skipping Demat broker cash. Changing the link affects future transactions only;
+it does not rewrite old transaction account IDs.
+
+### Dates, prices, NAV, and charges
+
+An investment sale can have two dates:
+
+- **Trade / redemption date** changes units, cost basis, and realised P&L.
+- **Settlement / bank-credit date** changes the cash account or broker-cash
+  balance.
+
+For an MF SIP, use the NAV belonging to the actual allotment/transaction date,
+even if the pending occurrence is confirmed later. FinTrack attempts to fetch
+that historical NAV; it remains editable before confirmation. For stocks, enter
+the executed trade price. Charges are added to BUY cost basis and deducted from
+SELL/redemption proceeds.
+
+```text
+Gross sale proceeds = Units sold x Sale price or NAV
+Net cash proceeds   = Gross sale proceeds - Charges
+BUY cash outflow    = Units bought x Buy price or NAV + Charges
+```
+
+Do not add a second manual transfer for an MF redemption: the redemption itself
+credits the linked bank. For a stock sale, do not transfer the sale amount from
+the bank; first record the sale into Demat broker cash, then use **Withdraw
+broker cash** when the broker pays it to the linked bank. Available broker cash
+may instead fund a later stock BUY without touching the bank.
+
+### Recurring investments
+
+A recurring rule is a schedule, not a transaction. When a SIP or deposit is
+due, FinTrack creates one pending occurrence. Confirming it creates the real
+investment transaction and debits its funding account; skipping it records no
+money movement. If FinTrack was closed for several months, it generates each
+missing occurrence when it next starts, without duplicates. Editing a rule's
+amount changes future pending occurrences and does not rewrite confirmed
+history.
+
+### Route safeguards
+
+- Income can be credited only to an active non-investment asset account.
+- Expenses cannot be paid directly from an MF, Demat, PPF, NPS, gold, or FD
+  container. Select the real bank/card/cash account used for payment.
+- Connected investment BUY/DEPOSIT transactions require an asset funding
+  account or available Demat broker cash; a card or loan cannot fund them.
+- Investment WITHDRAWAL transactions require a receiving asset account.
+- Opening positions have no funding-account debit. Use them only for holdings
+  that existed before their FinTrack start date.
+- Internal transfers affect both account balances and never inflate income,
+  expenses, or investment contributions.
+
+Google Form expenses follow the same rules. On import, FinTrack assigns them to
+the active account whose purpose is **Spending**; review that account before
+using the form. A form response becomes a normal local expense in `data.xlsx`
+and is included in the account ledger, dashboard, and category reports.
+
 ## Dashboard
 
-The Dashboard is a summary of the selected month and your current tracked
-financial position.
+The Dashboard combines current net worth with flows from a selected reporting
+period. Choose financial year to date, selected month, calendar year, all time,
+or a custom date range.
 
 ### Summary cards
 
 - **Net Worth** — current tracked asset and investment-account balances minus
   credit-card and loan balances. Unassigned legacy holdings are also included.
-- **Monthly Income** — income recorded for the selected month. Click the value
-  to create or update it.
-- **Monthly Expenses** — total expense transactions dated in the selected
-  month.
-- **Net Savings** — income remaining after expenses, investment purchases, and
+- **Income Received** — dated income credits from every source in the period.
+- **Expenses** — categorized expense transactions in the period.
+- **Invested** — connected BUY and DEPOSIT cash contributions in the period;
+  prior/opening positions are excluded.
+- **Available Surplus** — income minus expenses, investments, and legacy
   emergency-fund contributions.
 
 Savings goals and the emergency fund are allocations, not additional assets.
@@ -144,9 +265,9 @@ The sentence below the cards combines account-linked signals into plain language
 
 It is a summary of entered data, not financial advice.
 
-### Income Breakdown
+### Money Allocation and Income Sources
 
-The doughnut chart divides the selected month's income into:
+The Money Allocation chart divides period income into:
 
 - expense categories;
 - investments purchased during the month;
@@ -156,21 +277,31 @@ The doughnut chart divides the selected month's income into:
 If income has not been entered, expense categories can still appear, but their
 percentage of income cannot be calculated.
 
-### Savings Rate Trend
+The Income Sources chart groups actual credits by salary, bonus, freelance,
+business, interest, dividend, rent, gift, and other income.
 
-Shows the percentage of income retained after expenses, investments, and
-emergency contributions for up to the last 12 months.
+Use **Add Income** to record the actual credit date, source, description,
+amount, and receiving account. The transaction immediately updates that
+account's ledger and balance.
+
+### Monthly Money Flow
+
+Compares income, expenses, investments, and available surplus across the last
+12 months ending at the header-selected month.
 
 A negative savings rate means total outflows were greater than recorded income.
 
 ### Net-Worth History
 
-Shows assets minus liabilities from your saved monthly snapshots. The chart
+Shows assets minus liabilities from automatically captured monthly snapshots.
+A manual snapshot overrides the automatic value for the same month. The chart
 does not manufacture historical investment prices or estimate goal balances.
 
-### Recent Transactions and Investment Snapshot
+### Expense Categories, Recent Activity, and Investment Snapshot
 
-- **Recent Transactions** shows the latest expense entries.
+- **Expense Categories** ranks period spending and can open the selected
+  category in Expenses.
+- **Recent Income & Expenses** combines the latest period credits and spending.
 - **Investment Snapshot** shows selected holdings, their current value, and
   unrealised gain or loss.
 
@@ -190,11 +321,13 @@ The Expenses section records and explains spending.
 
 | Category | Meaning |
 |---|---|
-| Food | Restaurants, delivery, snacks, and eating outside |
+| Food & Takeaway | Restaurants, delivery, snacks, and eating outside |
 | Grocery | Food and household items purchased for home |
 | Travel | Public transport, fuel, taxis, tickets, and trips |
 | Housing | Rent, maintenance, and home-related costs |
 | Health | Medical visits, medicine, fitness, and healthcare |
+| Personal Care | Haircuts, salon visits, grooming, cosmetics, and toiletries |
+| Subscriptions & Software | ChatGPT, cloud storage, antivirus, and productivity software |
 | Entertainment | Movies, games, events, and leisure subscriptions |
 | Utilities | Electricity, water, internet, phone, and similar bills |
 | Shopping | Clothing, electronics, and non-routine purchases |
@@ -232,8 +365,8 @@ informational and may be delayed or unavailable.
 
 - **Asset / Ticker** — the market identifier of a security. Indian NSE tickers
   normally end in `.NS`; US tickers generally have no suffix.
-- **Scheme Code** — the identifier used to look up an Indian mutual fund on
-  `mfapi.in`.
+- **Scheme Code** — the MFapi identifier stored automatically when a user
+  selects a mutual fund from the searchable scheme catalogue.
 - **Units** — shares, mutual-fund units, grams, or another quantity currently
   held.
 - **Buy Price** — average acquisition price per unit.
@@ -275,6 +408,35 @@ fund NAVs are requested from `mfapi.in`. Both requests go through the local
 server; browser-side public CORS proxies are not used. Gold, PPF, NPS, and
 fixed-deposit values are entered manually.
 
+### Offline mutual-fund search and NAVs
+
+When Mutual Funds is selected in Add Investment, type part of the fund name,
+AMC, plan, and option. Choose the exact Direct/Regular and Growth/IDCW result.
+FinTrack fills the fund name and stores its scheme code automatically.
+
+Scheme metadata is cached in `cache/market_data.sqlite`, not `data.xlsx`.
+The catalogue is downloaded automatically when it is empty and can be updated
+with **Refresh catalogue**. Once downloaded, name searches work without an
+internet connection.
+
+NAVs are cached only for schemes FinTrack has requested. If an online NAV
+request fails, FinTrack uses the last saved NAV and displays its date. If no
+catalogue or NAV is available, fund details, units, and NAV can still be entered
+manually; account and ledger calculations are never blocked by internet access.
+
+### Selling, redemption, and settlement
+
+Link each Mutual Fund or Demat / Brokerage account to the bank account that
+receives its settlements. Mutual-fund redemptions credit that linked bank on
+the entered bank-credit date. Stock sales first create broker cash inside the
+Demat account; use **Withdraw broker cash** to prepare an internal transfer to
+the linked bank, or reuse the cash for a later purchase.
+
+The sale form records the trade/redemption date, settlement/credit date,
+applicable price or NAV, charges, gross proceeds, and net proceeds. Mutual funds
+can be redeemed by units or amount. Charges reduce both the cash received and
+realised P&L.
+
 PPF and fixed deposits are transaction-based balance accounts. Their supported
 transactions are:
 
@@ -288,9 +450,20 @@ balance from these entries. Use the plus button on a balance-account card to
 add the next dated transaction. Only DEPOSIT entries count as monthly
 investment outflow; credited interest does not reduce monthly savings.
 
+When creating a holding that already existed before FinTrack, choose **Prior
+investment / opening position**. Enter the units or principal, remaining cost
+basis, current value, and an as-of date. The opening position is linked to its
+MF, Demat, PPF, NPS, gold, or FD account but does not debit a salary, savings,
+or other funding account and does not count as this month's investment outflow.
+Later transactions use the normal connected-account flow.
+
+For a new PPF/FD deposit, FinTrack records only the deposited principal.
+Expected maturity value is not treated as interest already received; add an
+INTEREST transaction only when the institution actually credits it.
+
 Mutual funds, stocks, NPS units, and Gold ETFs are unit-based holdings. For an
-existing SIP, enter its transaction history or one opening BUY using current
-units and remaining cost basis.
+existing SIP, use a prior opening position with current units and remaining
+average cost, then record future BUY transactions normally.
 
 ## Savings
 
@@ -323,15 +496,32 @@ twice.
 
 ### Emergency Fund
 
-An emergency fund is accessible money reserved for unexpected events such as
-medical costs, urgent repairs, or loss of income.
+An emergency reserve is a purpose assigned to assets you already own. It is not
+a second account and does not create money. Use **Allocate Asset** in Accounts
+to designate an existing bank/cash balance, FD, mutual fund, or another holding.
+Existing holdings can be marked at any time without changing their units, cost
+basis, transactions, gain/loss, account balance, or net worth.
 
-- **Target** — desired emergency reserve.
-- **Current** — sum of recorded emergency-fund contributions.
-- **Contribution** — an amount added on a particular date.
-- **Coverage Months** — current emergency fund divided by average essential
-  monthly expenses over the latest three selected months. It appears in the
-  Financial Plan summary.
+- **Target** — desired usable emergency reserve.
+- **Usable Reserve** — allocations marked **Available Now** plus **Needs
+  Redemption**.
+- **Target Gap** — target minus usable reserve, never below zero.
+- **Available Now** — cash or account value that can be used immediately.
+- **Needs Redemption** — an investment that must first be withdrawn or sold.
+- **Locked / Excluded** — designated value shown for transparency but excluded
+  from target progress and coverage.
+- **Entire current value** — the allocation automatically follows the asset's
+  current FinTrack value.
+- **Fixed amount** — only the chosen amount is reserved. If the asset later
+  falls below it, the effective allocation is capped at the asset's current
+  value.
+- **Coverage Months** — usable reserve divided by the average essential monthly
+  expenses over the latest three selected months.
+
+Historical rows in `EFContributions` are preserved for old reports, but they are
+not treated as current reserve until the actual assets holding that money are
+allocated. This avoids double-counting balances that are already present in an
+account or investment.
 
 ## Accounts
 
@@ -365,6 +555,10 @@ For asset accounts, incoming money increases the balance and outgoing money
 decreases it. For credit cards and loans, charges increase the amount owed and
 payments reduce it. An internal transfer updates both accounts without being
 classified as income or spending.
+
+The Internal Transfers tile can be filtered by the header-selected month,
+calendar year, or financial year. The filtered list remains scrollable and the
+filter does not alter any ledger calculation.
 
 Example:
 
@@ -455,7 +649,7 @@ expense are different records.
 The forecast subtracts Remaining Budget plus only those upcoming bills marked
 as not included in a category budget.
 
-### Net-Worth Snapshot (legacy)
+### Net-Worth Snapshots
 
 **Net Worth** measures what you own minus what you owe at one point in time.
 
@@ -479,9 +673,11 @@ Formula:
 Net Worth = Total Assets − Total Liabilities
 ```
 
-Save one snapshot each month to see direction over time. A rising net worth
-normally indicates improving financial position, but asset values and debt
-changes should be reviewed separately.
+FinTrack automatically updates the current month from connected accounts and
+holdings. When a new month begins, the previous monthly observation remains in
+the history. Use the manual form only to import older months or override an
+automatic month. A rising net worth normally indicates improving financial
+position, but asset values and debt changes should be reviewed separately.
 
 ### Cash-Flow Forecast (legacy)
 
@@ -643,10 +839,11 @@ Return % = Gain/Loss ÷ Invested Value × 100
 
 On SELL:
 Cost Removed = Units Sold × Moving-Average Buy Price
-Realised Gain/Loss = Sale Proceeds − Cost Removed
+Net Sale Proceeds = (Units Sold × Sale Price) − Charges
+Realised Gain/Loss = Net Sale Proceeds − Cost Removed
 
 Weighted Average Buy Price
-= ((Old Units × Old Average Price) + (New Units × New Price))
+= ((Old Units × Old Average Price) + (New Units × New Price) + BUY Charges)
   ÷ Total Units
 ```
 
@@ -654,11 +851,20 @@ Weighted Average Buy Price
 
 ```text
 Goal Progress % = Current Goal Amount ÷ Goal Target × 100
-Emergency Progress % = Current Emergency Fund ÷ Emergency Target × 100
+
+Source Value = FinTrack account balance or holding current value
+Requested Allocation = Source Value, for Entire current value mode
+Requested Allocation = Fixed Amount, for Fixed amount mode
+Effective Allocation = min(Requested Allocation, Source Value)
+Usable Reserve = Available Now + Needs Redemption
+Emergency Gap = max(0, Emergency Target - Usable Reserve)
+Emergency Progress % = Usable Reserve ÷ Emergency Target × 100
+Coverage Months = Usable Reserve ÷ Average Essential Monthly Expenses
 ```
 
-Displayed progress is capped at 100%, although the stored amount can be greater
-than the target.
+Displayed progress is capped at 100%. Locked allocations remain visible but are
+excluded from progress and coverage. Allocating an asset changes only its
+purpose tag; it creates no ledger entry and has no net-worth effect.
 
 ### Budget and forecast
 
@@ -678,6 +884,10 @@ finance-tracker/
 ├── server.py                    Flask API and local workbook handling
 ├── requirements.txt             Python dependencies
 ├── start.bat                    Windows launcher
+├── start_server.cmd             Managed background-server launcher
+├── start_server.ps1             Launcher implementation and PID verification
+├── stop_server.cmd              Managed-server stop command
+├── stop_server.ps1              Stop implementation and ownership check
 ├── data.xlsx                    Generated local finance data (gitignored)
 ├── backups/                     Local recovery copies (gitignored)
 ├── documents/                   Uploaded local documents (gitignored)
@@ -722,8 +932,8 @@ Use whichever command succeeds for installation and startup.
 ### Dashboard is empty
 
 - Confirm `server.py` is running.
-- Check that the selected month contains data.
-- Click Monthly Income to enter income.
+- Check that the Dashboard reporting period contains data.
+- Use **Add Income** to record a dated credit and receiving account.
 - Add expenses manually or verify Google Sheets sync.
 - Hard-refresh the browser with `Ctrl+F5` after restarting the server.
 
