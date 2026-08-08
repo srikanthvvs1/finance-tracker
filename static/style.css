@@ -586,6 +586,29 @@ html, body {
   font-weight: 600;
 }
 
+.chart-header > div {
+  min-width: 0;
+}
+
+.chart-nature-select {
+  flex: 0 0 auto;
+  min-width: 92px;
+  padding: 7px 28px 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.chart-nature-select:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(99,102,241,0.12);
+}
+
 .chart-subtitle {
   font-size: 12px;
   color: var(--text-muted);
@@ -635,6 +658,28 @@ html, body {
   font: inherit;
   cursor: pointer;
 }
+
+.chart-nature-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.chart-nature-summary > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 11px;
+  border-radius: 9px;
+  background: #f8fafc;
+}
+
+.chart-nature-summary span { color: var(--text-muted); font-size: 11px; font-weight: 600; }
+.chart-nature-summary strong { color: var(--text-primary); font-size: 13px; }
+.chart-nature-summary > div:first-child { border-left: 3px solid #8b5cf6; }
+.chart-nature-summary > div:last-child { border-left: 3px solid #f59e0b; }
 
 .dashboard-toolbar {
   display: flex;
@@ -1369,8 +1414,10 @@ html, body {
 .cat-food          { background: #fef3c7; color: #92400e; }
 .cat-income        { background: #d1fae5; color: #047857; }
 .cat-grocery       { background: #dcfce7; color: #166534; }
+.cat-vegetables-fruits { background: #ecfccb; color: #3f6212; }
 .cat-travel        { background: #dbeafe; color: #1e40af; }
 .cat-housing       { background: #d1fae5; color: #065f46; }
+.cat-parents-fund  { background: #fce7f3; color: #9d174d; }
 .cat-health        { background: #fce7f3; color: #9d174d; }
 .cat-personal-care { background: #ffedd5; color: #9a3412; }
 .cat-subscriptions { background: #e0e7ff; color: #3730a3; }
@@ -1378,6 +1425,19 @@ html, body {
 .cat-utilities     { background: #e0f2fe; color: #0c4a6e; }
 .cat-shopping      { background: #fef9c3; color: #854d0e; }
 .cat-other         { background: #f1f5f9; color: #475569; }
+
+.expense-nature-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.expense-nature-fixed { background: #ede9fe; color: #5b21b6; }
+.expense-nature-variable { background: #ffedd5; color: #9a3412; }
 
 /* ============================================================
    TRANSACTION LIST (DASHBOARD WIDGET)
@@ -1629,7 +1689,7 @@ html, body {
 
 .expense-summary-strip {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
   gap: 12px;
   margin-bottom: 16px;
 }
@@ -2087,6 +2147,9 @@ html, body {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
+
+.strip-item.strip-fixed { border-left: 3px solid #8b5cf6; }
+.strip-item.strip-variable { border-left: 3px solid #f59e0b; }
 
 /* Buy / Sell action buttons */
 .action-btn.buy-btn {

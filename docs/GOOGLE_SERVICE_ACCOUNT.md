@@ -20,16 +20,33 @@ rows after they have been safely written locally.
    ```
 
 The spreadsheet ID is the value between `/d/` and `/edit` in its URL. The
-worksheet must use these headers:
+worksheet uses these headers (column order does not matter):
 
 ```text
-Timestamp | Expense Date | Amount | Category | Description | PaymentMode
+Timestamp | Expense Date | Amount | Category | Expense Nature | Description | PaymentMode
 ```
 
+`Expense Nature` can contain `fixed` or `variable`. It is optional for an older
+form: when the column or value is absent, FinTrack infers an editable default
+from Category and Description. Housing and Subscriptions default to Fixed;
+other categories default to Variable unless a recurring keyword such as rent,
+EMI, insurance, subscription, broadband, or Wi-Fi is present.
+
 The Apps Script in `config/setup_form.gs` can create the form and worksheet.
-Its category list includes `food`, `grocery`, `travel`, `housing`, `health`,
-`personal_care`, `subscriptions`, `entertainment`, `utilities`, `shopping`, and
-`other`.
+Its category list includes `food`, `grocery`, `vegetables_fruits`, `travel`,
+`housing`, `parents_fund`, `health`, `personal_care`, `subscriptions`,
+`entertainment`, `utilities`, `shopping`, and `other`. New forms created by the
+script also include the Fixed/Variable question.
+
+For an existing Google Form, add `vegetables_fruits` and `parents_fund` to its
+Category dropdown.
+FinTrack also accepts `vegetable`, `vegetables`, `veggie`, `veggies`, `fruit`,
+`fruits`, or `produce` from older or manually maintained forms and stores the
+canonical `vegetables_fruits` value.
+
+FinTrack accepts `parent`, `parents`, `parent_fund`, `parent_support`,
+`parents_support`, `parental_support`, `family_support`, or `money_to_parents`
+and stores the canonical `parents_fund` value.
 
 ## Sync behavior
 

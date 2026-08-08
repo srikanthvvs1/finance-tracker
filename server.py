@@ -21,6 +21,7 @@ import sqlite3
 import tempfile
 import threading
 import time
+from copy import copy
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -68,7 +69,10 @@ app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="")
 #  EXCEL HELPERS  (atomic writes via temp-file + rename)
 # ═══════════════════════════════════════════════════════════════
 
-EXPENSE_COLS = ["id", "date", "description", "category", "payment", "amount", "accountId"]
+EXPENSE_COLS = [
+    "id", "date", "description", "category", "payment", "amount", "accountId",
+    "expenseNature",
+]
 INCOME_COLS = ["id", "date", "source", "description", "amount", "accountId"]
 INVESTMENT_COLS = [
     "id", "asset", "name", "category", "units", "buyPrice",
@@ -209,6 +213,103 @@ def _ensure_planning_sheets(wb):
     return changed
 
 
+_VALID_EXPENSE_NATURES = {"fixed", "variable"}
+_DEFAULT_FIXED_CATEGORIES = {"housing", "subscriptions"}
+_FIXED_EXPENSE_PATTERNS = (
+    r"\brent\b", r"\blease\b", r"\bemi\b", r"\bmortgage\b",
+    r"\bsubscription\b", r"\bmembership\b", r"\binsurance\b",
+    r"\bschool fees?\b", r"\btuition fees?\b", r"\bannual charges?\b",
+    r"\bbroadband\b", r"\binternet\b", r"\bwifi\b",
+)
+
+
+def _infer_expense_nature(category, description=""):
+    """Infer a sensible editable default without changing the expense category."""
+    if str(category or "").strip().lower() in _DEFAULT_FIXED_CATEGORIES:
+        return "fixed"
+    text = str(description or "").strip().casefold()
+    return "fixed" if any(re.search(pattern, text) for pattern in _FIXED_EXPENSE_PATTERNS) else "variable"
+
+
+def _normalise_expense_nature(raw, category, description=""):
+    cleaned = str(raw or "").strip().lower()
+    if cleaned in _VALID_EXPENSE_NATURES:
+        return cleaned
+    return _infer_expense_nature(category, description)
+
+
+def _ensure_expense_nature_column(wb):
+    """Append/backfill the additive nature column while preserving all existing cells."""
+    if "Expenses" not in wb.sheetnames:
+        return False
+    ws = wb["Expenses"]
+    headers = [str(cell.value or "") for cell in ws[1]]
+    positions = {name: index + 1 for index, name in enumerate(headers) if name}
+    changed = False
+    nature_col = positions.get("expenseNature")
+    if nature_col is None:
+        nature_col = len(headers) + 1
+        source = ws.cell(row=1, column=max(1, nature_col - 1))
+        target = ws.cell(row=1, column=nature_col, value="expenseNature")
+        target._style = copy(source._style)
+        target.font = copy(source.font)
+        target.fill = copy(source.fill)
+        target.border = copy(source.border)
+        target.alignment = copy(source.alignment)
+        target.protection = copy(source.protection)
+        ws.column_dimensions[openpyxl.utils.get_column_letter(nature_col)].width = 18
+        changed = True
+
+    category_col = positions.get("category")
+    description_col = positions.get("description")
+    for row_number in range(2, ws.max_row + 1):
+        category = ws.cell(row=row_number, column=category_col).value if category_col else ""
+        description = ws.cell(row=row_number, column=description_col).value if description_col else ""
+        cell = ws.cell(row=row_number, column=nature_col)
+        normalised = _normalise_expense_nature(cell.value, category, description)
+        if cell.value != normalised:
+            cell.value = normalised
+            changed = True
+
+    if changed:
+        ws.auto_filter.ref = ws.dimensions
+    return changed
+
+
+_VEGETABLES_FRUITS_DESCRIPTION = re.compile(
+    r"^\s*(?:vegetables?|veggies?|fruits?|produce)(?:\s*[-:/]|\s*$)",
+    re.IGNORECASE,
+)
+
+
+def _migrate_vegetables_fruits_category(wb):
+    """Move only unmistakable legacy Grocery rows into the produce category."""
+    if "Expenses" not in wb.sheetnames:
+        return False
+    ws = wb["Expenses"]
+    positions = {
+        str(cell.value or ""): index + 1
+        for index, cell in enumerate(ws[1])
+        if cell.value
+    }
+    category_col = positions.get("category")
+    description_col = positions.get("description")
+    if not category_col or not description_col:
+        return False
+
+    changed = False
+    for row_number in range(2, ws.max_row + 1):
+        category_cell = ws.cell(row=row_number, column=category_col)
+        description = ws.cell(row=row_number, column=description_col).value
+        if (
+            str(category_cell.value or "").strip().lower() == "grocery"
+            and _VEGETABLES_FRUITS_DESCRIPTION.search(str(description or ""))
+        ):
+            category_cell.value = "vegetables_fruits"
+            changed = True
+    return changed
+
+
 def _migrate_sheet_schema(wb, sheet_name, columns):
     """Reorder/add known columns without discarding existing rows."""
     if sheet_name not in wb.sheetnames:
@@ -278,6 +379,8 @@ def _ensure_workbook():
             wb = _open_workbook(retries=8, delay=1.0)
             # Upgrade known sheets in place; never delete user data for a schema change.
             changed = _ensure_planning_sheets(wb)
+            changed = _ensure_expense_nature_column(wb) or changed
+            changed = _migrate_vegetables_fruits_category(wb) or changed
             schemas = {
                 "Expenses": EXPENSE_COLS,
                 "Investments": INVESTMENT_COLS,
@@ -337,7 +440,7 @@ def _ensure_workbook():
         return ws
 
     # Create empty, formatted sheets. User data is added through the app or expense sync.
-    _create_sheet("Expenses", EXPENSE_COLS, widths=[12, 14, 35, 16, 14, 14])
+    _create_sheet("Expenses", EXPENSE_COLS, widths=[12, 14, 35, 16, 14, 14, 16, 18])
     _create_sheet("IncomeTransactions", INCOME_COLS, widths=[12, 14, 18, 36, 16, 16])
     _create_sheet("Investments", INVESTMENT_COLS, widths=[14, 14, 28, 18, 12, 16, 16, 14, 12, 12, 16, 14, 18, 14])
     _create_sheet("Transactions", TRANSACTION_COLS, widths=[14, 14, 10, 12, 16, 14, 14, 16, 14])
@@ -474,7 +577,7 @@ def _write_sheets(sheet_data):
 # ═══════════════════════════════════════════════════════════════
 
 _VALID_CATEGORIES = {
-    "food", "grocery", "travel", "housing", "health",
+    "food", "grocery", "vegetables_fruits", "travel", "housing", "parents_fund", "health",
     "personal_care", "subscriptions", "entertainment", "utilities", "shopping", "other",
 }
 _VALID_PAYMENTS = {"card", "debit", "cash", "transfer", "upi"}
@@ -486,6 +589,15 @@ def _normalise_category(raw):
         return cleaned
     return {
         "food_&_dining": "food", "dining": "food", "groceries": "grocery",
+        "vegetable": "vegetables_fruits", "vegetables": "vegetables_fruits",
+        "veggie": "vegetables_fruits", "veggies": "vegetables_fruits",
+        "fruit": "vegetables_fruits", "fruits": "vegetables_fruits",
+        "produce": "vegetables_fruits", "vegetables_&_fruits": "vegetables_fruits",
+        "vegetables_and_fruits": "vegetables_fruits",
+        "parent": "parents_fund", "parents": "parents_fund",
+        "parent_fund": "parents_fund", "parents_support": "parents_fund",
+        "parent_support": "parents_fund", "parental_support": "parents_fund",
+        "family_support": "parents_fund", "money_to_parents": "parents_fund",
         "transport": "travel", "transportation": "travel", "cab": "travel",
         "rent": "housing", "home": "housing", "medical": "health",
         "medicine": "health", "pharmacy": "health", "bills": "utilities",
@@ -616,6 +728,11 @@ def _sync_form_expenses():
                         "amount": amount,
                         "accountId": default_spending_account,
                     }
+                    item["expenseNature"] = _normalise_expense_nature(
+                        field(row, "Expense Nature", "ExpenseNature", "Nature", "Expense Type"),
+                        item["category"],
+                        item["description"],
+                    )
                     fingerprint = _expense_fingerprint(item)
                     if fingerprint not in existing:
                         next_id += 1
@@ -691,6 +808,9 @@ def get_expenses():
         r["id"] = int(r["id"]) if r["id"] else 0
         r["amount"] = float(r["amount"]) if r["amount"] else 0
         r["accountId"] = int(r["accountId"]) if r.get("accountId") else None
+        r["expenseNature"] = _normalise_expense_nature(
+            r.get("expenseNature"), r.get("category"), r.get("description")
+        )
     return jsonify(rows)
 
 
@@ -716,10 +836,17 @@ def save_expenses():
             return jsonify({"error": "Expense requires a date, positive amount, and valid paying account"}), 400
         if str(account.get("classification") or "asset").lower() == "investment":
             return jsonify({"error": "Expenses cannot be paid directly from an investment account"}), 400
+        raw_nature = str(row.get("expenseNature") or "").strip().lower()
+        if raw_nature and raw_nature not in _VALID_EXPENSE_NATURES:
+            return jsonify({"error": "Expense nature must be fixed or variable"}), 400
+        expense_nature = _normalise_expense_nature(
+            raw_nature, row.get("category"), row.get("description")
+        )
         cleaned.append({
             **{column: row.get(column) for column in EXPENSE_COLS},
             "amount": amount,
             "accountId": account_id,
+            "expenseNature": expense_nature,
         })
     _write_sheet("Expenses", EXPENSE_COLS, cleaned)
     return jsonify({"ok": True, "count": len(cleaned)})

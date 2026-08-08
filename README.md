@@ -274,8 +274,10 @@ The Money Allocation chart divides period income into:
 - emergency-fund contributions; and
 - **Unallocated**, which is income not assigned to any of those uses.
 
-If income has not been entered, expense categories can still appear, but their
-percentage of income cannot be calculated.
+Legend percentages show each slice's share of **total allocation**, so they
+remain available even when no income is recorded for the period. The tooltip
+also shows percentage of income when period income exists; otherwise it says
+that income is not recorded.
 
 The Income Sources chart groups actual credits by salary, bonus, freelance,
 business, interest, dividend, rent, gift, and other income.
@@ -299,8 +301,11 @@ does not manufacture historical investment prices or estimate goal balances.
 
 ### Expense Categories, Recent Activity, and Investment Snapshot
 
-- **Expense Categories** ranks period spending and can open the selected
-  category in Expenses.
+- **Expense Categories** defaults to Variable spending so rent and other fixed
+  commitments do not overwhelm controllable categories. Use the
+  **Variable / Fixed / All** selector; clicking a category opens the matching
+  category and nature in Expenses. Fixed and Variable totals remain visible
+  below the chart regardless of the selected chart view.
 - **Recent Income & Expenses** combines the latest period credits and spending.
 - **Investment Snapshot** shows selected holdings, their current value, and
   unrealised gain or loss.
@@ -314,6 +319,9 @@ The Expenses section records and explains spending.
 - **Date** — when the payment occurred.
 - **Description** — merchant, bill, or purpose of the payment.
 - **Category** — the type of spending.
+- **Expense Nature** — **Fixed** for recurring commitments such as rent,
+  subscriptions, EMI, or insurance; **Variable** for spending that changes with
+  usage or choice. This is independent of Category.
 - **Payment Method** — how the expense was paid.
 - **Amount** — money spent.
 
@@ -322,9 +330,11 @@ The Expenses section records and explains spending.
 | Category | Meaning |
 |---|---|
 | Food & Takeaway | Restaurants, delivery, snacks, and eating outside |
-| Grocery | Food and household items purchased for home |
+| Grocery | Packaged food, staples, cleaning supplies, and other household items purchased for home |
+| Vegetables & Fruits | Fresh vegetables, fruits, and produce purchased for home |
 | Travel | Public transport, fuel, taxis, tickets, and trips |
 | Housing | Rent, maintenance, and home-related costs |
+| Parents Fund | Money provided to parents or support for their household expenses |
 | Health | Medical visits, medicine, fitness, and healthcare |
 | Personal Care | Haircuts, salon visits, grooming, cosmetics, and toiletries |
 | Subscriptions & Software | ChatGPT, cloud storage, antivirus, and productivity software |
@@ -332,6 +342,12 @@ The Expenses section records and explains spending.
 | Utilities | Electricity, water, internet, phone, and similar bills |
 | Shopping | Clothing, electronics, and non-routine purchases |
 | Other | Spending that does not fit another category |
+
+On the first start after this upgrade, an existing Grocery row is reclassified
+only when its description begins with `Vegetable`, `Vegetables`, `Veggie`,
+`Veggies`, `Fruit`, `Fruits`, or `Produce`. Other Grocery rows remain unchanged.
+This changes reporting classification only; its amount, date, paying account,
+and ledger effect do not change.
 
 ### Payment methods
 
@@ -343,18 +359,26 @@ The Expenses section records and explains spending.
 
 ### Charts and summary values
 
-- **Expense Trend** shows totals and category composition for the last 12
-  months. Therefore, it can show older spending even when the table is empty
-  for the currently selected month.
-- **Category Split** shows the selected month's spending by category.
-- **Total This Month** is the sum of filtered expenses.
+- **Expense Trend** uses the synchronized **Variable / Fixed / All** selector.
+  Variable or Fixed shows that nature's 12-month line; All shows stacked Fixed
+  and Variable bars with a combined total line. Therefore, it can show older
+  spending even when the table is empty for the currently selected month.
+- **Category Split** defaults to Variable spending for the selected month. Use
+  its **Variable / Fixed / All** selector to change the population.
+- **Total Expenses** is Fixed Expenses plus Variable Expenses for the selected
+  year, month, and category filters.
+- **Fixed Expenses** and **Variable Expenses** remain visible side by side even
+  when the Nature filter limits the transaction table.
 - **Transactions** is the number of filtered expense records.
-- **Average Per Day** is the filtered total divided by 30.
-- **Largest Expense** is the highest single filtered transaction.
-- **Projected Month-End** estimates spending at the current daily pace.
+- **Variable Avg / Day** divides only Variable expenses by the applicable
+  elapsed or period days; Fixed expenses do not inflate the daily pace.
+- **Largest Variable Expense** is the highest single Variable transaction.
+- **Variable Projected Month-End** projects only Variable spending for the
+  specifically selected current month. It displays a dash for other periods.
 
-Filters affect the expense table and summary strip. The 12-month trend remains
-a historical chart.
+Year, month, and category filters affect the table and summary strip. The Nature
+filter limits the table, while the summary keeps both nature totals visible for
+comparison. The 12-month trend remains a historical chart.
 
 ## Investments
 
@@ -503,20 +527,20 @@ Existing holdings can be marked at any time without changing their units, cost
 basis, transactions, gain/loss, account balance, or net worth.
 
 - **Target** — desired usable emergency reserve.
-- **Usable Reserve** — allocations marked **Available Now** plus **Needs
-  Redemption**.
-- **Target Gap** — target minus usable reserve, never below zero.
+- **Total Emergency Reserve** — all designated allocations, including locked
+  or restricted assets.
+- **Target Gap** — target minus total emergency reserve, never below zero.
 - **Available Now** — cash or account value that can be used immediately.
 - **Needs Redemption** — an investment that must first be withdrawn or sold.
-- **Locked / Excluded** — designated value shown for transparency but excluded
-  from target progress and coverage.
+- **Locked / Restricted** — designated value that is difficult or restricted to
+  access. It remains included in target progress and coverage.
 - **Entire current value** — the allocation automatically follows the asset's
   current FinTrack value.
 - **Fixed amount** — only the chosen amount is reserved. If the asset later
   falls below it, the effective allocation is capped at the asset's current
   value.
-- **Coverage Months** — usable reserve divided by the average essential monthly
-  expenses over the latest three selected months.
+- **Coverage Months** — total emergency reserve divided by the average essential
+  monthly expenses over the latest three selected months.
 
 Historical rows in `EFContributions` are preserved for old reports, but they are
 not treated as current reserve until the actual assets holding that money are
@@ -771,7 +795,8 @@ When FinTrack starts:
 
 1. It reads rows from `FormExpenses`.
 2. It validates dates and amounts.
-3. It normalises category and payment names.
+3. It normalises category, expense nature, and payment names. If an older form
+   has no Expense Nature question, FinTrack infers an editable default.
 4. It checks local expenses for duplicates.
 5. It writes new expenses to `data.xlsx`.
 6. It removes successfully handled or duplicate inbox rows.
@@ -856,15 +881,16 @@ Source Value = FinTrack account balance or holding current value
 Requested Allocation = Source Value, for Entire current value mode
 Requested Allocation = Fixed Amount, for Fixed amount mode
 Effective Allocation = min(Requested Allocation, Source Value)
-Usable Reserve = Available Now + Needs Redemption
-Emergency Gap = max(0, Emergency Target - Usable Reserve)
-Emergency Progress % = Usable Reserve ÷ Emergency Target × 100
-Coverage Months = Usable Reserve ÷ Average Essential Monthly Expenses
+Total Emergency Reserve = Available Now + Needs Redemption + Locked / Restricted
+Emergency Gap = max(0, Emergency Target - Total Emergency Reserve)
+Emergency Progress % = Total Emergency Reserve ÷ Emergency Target × 100
+Coverage Months = Total Emergency Reserve ÷ Average Essential Monthly Expenses
 ```
 
-Displayed progress is capped at 100%. Locked allocations remain visible but are
-excluded from progress and coverage. Allocating an asset changes only its
-purpose tag; it creates no ledger entry and has no net-worth effect.
+Displayed progress is capped at 100%. Locked allocations remain separately
+identified but are included in progress and coverage. Allocating an asset
+changes only its purpose tag; it creates no ledger entry and has no net-worth
+effect.
 
 ### Budget and forecast
 

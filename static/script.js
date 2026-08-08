@@ -195,8 +195,10 @@ function showSyncToast(count) {
 const categoryConfig = {
   food:          { label: 'Food & Takeaway', icon: '🍔', cls: 'cat-food'          },
   grocery:       { label: 'Grocery',       icon: '🛒', cls: 'cat-grocery'       },
+  vegetables_fruits: { label: 'Vegetables & Fruits', icon: '🥦', cls: 'cat-vegetables-fruits' },
   travel:        { label: 'Travel',        icon: '✈️',  cls: 'cat-travel'        },
   housing:       { label: 'Housing',       icon: '🏠', cls: 'cat-housing'       },
+  parents_fund:  { label: 'Parents Fund',  icon: '👪', cls: 'cat-parents-fund'  },
   health:        { label: 'Health',        icon: '⚕️',  cls: 'cat-health'        },
   personal_care: { label: 'Personal Care', icon: '💇', cls: 'cat-personal-care' },
   subscriptions: { label: 'Subscriptions & Software', icon: '💻', cls: 'cat-subscriptions' },
@@ -205,6 +207,30 @@ const categoryConfig = {
   shopping:      { label: 'Shopping',      icon: '🛍️', cls: 'cat-shopping'      },
   other:         { label: 'Other',         icon: '📦', cls: 'cat-other'         },
 };
+
+const fixedExpenseCategories = new Set(['housing', 'subscriptions']);
+const fixedExpensePatterns = [
+  /\brent\b/i, /\blease\b/i, /\bemi\b/i, /\bmortgage\b/i,
+  /\bsubscription\b/i, /\bmembership\b/i, /\binsurance\b/i,
+  /\bschool fees?\b/i, /\btuition fees?\b/i, /\bannual charges?\b/i,
+  /\bbroadband\b/i, /\binternet\b/i, /\bwifi\b/i,
+];
+
+function inferExpenseNature(category, description = '') {
+  if (fixedExpenseCategories.has(String(category || '').toLowerCase())) return 'fixed';
+  return fixedExpensePatterns.some(pattern => pattern.test(String(description || '')))
+    ? 'fixed'
+    : 'variable';
+}
+
+function getExpenseNature(expense) {
+  const saved = String(expense?.expenseNature || '').toLowerCase();
+  return ['fixed', 'variable'].includes(saved)
+    ? saved
+    : inferExpenseNature(expense?.category, expense?.description);
+}
+
+const expenseNatureLabels = { fixed: 'Fixed', variable: 'Variable', all: 'All' };
 
 const typeLabels = {
   stocks: 'Stocks', mutual_funds: 'Mutual Funds', gold: 'Gold',
@@ -733,25 +759,48 @@ function renderInvestmentSnapshot() {
 let expFilterCat    = 'all';
 let expFilterYear   = String(new Date().getFullYear());
 let expFilterMonth  = String(new Date().getMonth() + 1).padStart(2, '0');
+let expFilterNature = 'all';
 let expGroupByMonth = true;
 
-function getFilteredExpenses() {
+function savedExpenseChartNature() {
+  try {
+    const saved = localStorage.getItem('fintrackExpenseChartNature');
+    return ['fixed', 'variable', 'all'].includes(saved) ? saved : 'variable';
+  } catch (_error) {
+    return 'variable';
+  }
+}
+
+let expenseChartNature = savedExpenseChartNature();
+
+function syncExpenseNatureControls() {
+  document.querySelectorAll('[data-expense-chart-nature]').forEach(select => {
+    select.value = expenseChartNature;
+  });
+  const tableNature = document.getElementById('filterExpenseNature');
+  if (tableNature) tableNature.value = expFilterNature;
+}
+
+function getFilteredExpenses(ignoreNature = false) {
   return expenses.filter(e => {
     const [y, m] = e.date.split('-');
     if (expFilterCat  !== 'all' && e.category !== expFilterCat)  return false;
     if (expFilterYear !== 'all' && y           !== expFilterYear) return false;
     if (expFilterMonth!== 'all' && m           !== expFilterMonth)return false;
+    if (!ignoreNature && expFilterNature !== 'all' && getExpenseNature(e) !== expFilterNature) return false;
     return true;
   }).sort((a, b) => a.date.localeCompare(b.date));
 }
 
 function buildExpenseRow(exp) {
   const cat = categoryConfig[exp.category] || categoryConfig.other;
+  const nature = getExpenseNature(exp);
   return `
     <tr>
       <td>${fmtDate(exp.date)}</td>
       <td>${escHtml(exp.description)}</td>
       <td><span class="cat-badge ${cat.cls}">${cat.icon} ${cat.label}</span></td>
+      <td><span class="expense-nature-badge expense-nature-${nature}">${expenseNatureLabels[nature]}</span></td>
       <td>${payLabels[exp.payment] || exp.payment}</td>
       <td style="font-weight:600; color:var(--danger);">-${fmt(exp.amount)}</td>
       <td>
@@ -789,11 +838,11 @@ function renderExpensesTable() {
       const rows = groups[key].map(buildExpenseRow).join('');
       return `
         <tr class="month-group-header">
-          <td colspan="6">📅 ${monthName} &nbsp;—&nbsp; ${groups[key].length} transaction${groups[key].length > 1 ? 's' : ''}</td>
+          <td colspan="7">📅 ${monthName} &nbsp;—&nbsp; ${groups[key].length} transaction${groups[key].length > 1 ? 's' : ''}</td>
         </tr>
         ${rows}
         <tr class="month-subtotal">
-          <td colspan="4" style="text-align:right;">Month Total</td>
+          <td colspan="5" style="text-align:right;">Month Total</td>
           <td style="color:var(--danger);">-${fmt(groupTotal)}</td>
           <td></td>
         </tr>`;
@@ -803,10 +852,10 @@ function renderExpensesTable() {
     // --- Flat list view (or filtered to specific month/year) ---
     tbody.innerHTML = filtered.length
       ? filtered.map(buildExpenseRow).join('')
-      : `<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--text-muted);">No expenses found for selected filters.</td></tr>`;
+      : `<tr><td colspan="7" style="text-align:center;padding:24px;color:var(--text-muted);">No expenses found for selected filters.</td></tr>`;
   }
 
-  updateExpenseSummaryStrip(filtered);
+  updateExpenseSummaryStrip(getFilteredExpenses(true));
   renderExpenseCategoryBreakdown();
   populateYearDropdown();
 }
@@ -825,6 +874,9 @@ function populateYearDropdown() {
 
 function updateExpenseSummaryStrip(filtered) {
   const total    = filtered.reduce((s, e) => s + e.amount, 0);
+  const fixed    = filtered.filter(e => getExpenseNature(e) === 'fixed').reduce((s, e) => s + e.amount, 0);
+  const variableRows = filtered.filter(e => getExpenseNature(e) === 'variable');
+  const variable = variableRows.reduce((s, e) => s + e.amount, 0);
   const count    = filtered.length;
   const today = new Date();
   let periodDays = 0;
@@ -833,35 +885,40 @@ function updateExpenseSummaryStrip(filtered) {
     const year = Number(expFilterYear);
     const isCurrent = month === today.getMonth() + 1 && year === today.getFullYear();
     periodDays = isCurrent ? today.getDate() : new Date(year, month, 0).getDate();
-  } else if (filtered.length) {
-    const dates = filtered.map(row => new Date(row.date)).filter(d => !Number.isNaN(d.valueOf()));
+  } else if (variableRows.length) {
+    const dates = variableRows.map(row => new Date(row.date)).filter(d => !Number.isNaN(d.valueOf()));
     periodDays = dates.length
       ? Math.max(1, Math.ceil((Math.max(...dates) - Math.min(...dates)) / 86400000) + 1)
       : 0;
   }
-  const avgDay = periodDays ? total / periodDays : 0;
-  const largest  = filtered.reduce((max, e) => e.amount > max.amount ? e : max, { amount: 0, category: '' });
+  const avgDay = periodDays ? variable / periodDays : 0;
+  const largest = variableRows.reduce(
+    (max, e) => e.amount > max.amount ? e : max,
+    { amount: 0, category: '' },
+  );
   const largestCat = largest.amount ? (categoryConfig[largest.category]?.label || 'Other') : '-';
 
   document.getElementById('stripTotal')  .textContent = fmt(total);
+  document.getElementById('stripFixed')  .textContent = fmt(fixed);
+  document.getElementById('stripVariable').textContent = fmt(variable);
   document.getElementById('stripCount')  .textContent = count;
   document.getElementById('stripAvg')    .textContent = fmt(avgDay);
   document.getElementById('stripLargest').textContent = largest.amount
     ? `${fmt(largest.amount)} (${largestCat})`
     : '-';
 
-  /* Run-rate forecast: projected month-end spend */
-  const isCurrentMonth = (expFilterMonth === 'all' || parseInt(expFilterMonth) === today.getMonth() + 1)
-                      && (expFilterYear === 'all' || parseInt(expFilterYear) === today.getFullYear());
+  /* Variable-spending run rate; fixed commitments must not inflate the pace. */
+  const isCurrentMonth = expFilterMonth === String(today.getMonth() + 1).padStart(2, '0')
+                      && expFilterYear === String(today.getFullYear());
   const forecastEl = document.getElementById('stripForecast');
   if (forecastEl) {
     if (isCurrentMonth && today.getDate() > 1) {
       const dayOfMonth = today.getDate();
       const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
-      const projected = Math.round(total / dayOfMonth * daysInMonth);
+      const projected = Math.round(variable / dayOfMonth * daysInMonth);
       forecastEl.textContent = `~${fmt(projected)}`;
     } else {
-      forecastEl.textContent = fmt(total);
+      forecastEl.textContent = '-';
     }
   }
 }
@@ -878,6 +935,7 @@ function openExpenseModalForEdit(id) {
   form.amount.value      = exp.amount;
   form.description.value = exp.description;
   form.category.value    = exp.category;
+  form.expenseNature.value = getExpenseNature(exp);
   form.payment.value     = exp.payment || 'upi';
   form.accountId.value   = exp.accountId || '';
   // Update modal title & button
@@ -1000,9 +1058,33 @@ document.getElementById('filterMonth')?.addEventListener('change', e => {
   refreshDashboard();
 });
 
+document.getElementById('filterExpenseNature')?.addEventListener('change', e => {
+  expFilterNature = e.target.value;
+  renderExpensesTable();
+});
+
 document.getElementById('filterGroupBy')?.addEventListener('change', e => {
   expGroupByMonth = e.target.value === 'month';
   renderExpensesTable();
+});
+
+document.querySelectorAll('[data-expense-chart-nature]').forEach(select => {
+  select.addEventListener('change', event => {
+    expenseChartNature = event.target.value;
+    try {
+      localStorage.setItem('fintrackExpenseChartNature', expenseChartNature);
+    } catch (_error) { /* Browser storage is optional. */ }
+    syncExpenseNatureControls();
+    renderExpenseCategoryBreakdown();
+    initCharts();
+  });
+});
+
+document.getElementById('expCategory')?.addEventListener('change', event => {
+  const nature = document.getElementById('expNature');
+  if (nature) {
+    nature.value = inferExpenseNature(event.target.value, document.getElementById('expDesc')?.value);
+  }
 });
 
 
@@ -3014,6 +3096,8 @@ function buildMonthData(mIdx, yr) {
 
 function initCharts() {
 
+  syncExpenseNatureControls();
+
   /* Destroy previous instances */
   [chartExpense, chartIncomeSources, chartDashboardExpenseCategories, chartSavTrend,
     chartPortfolio, chartPerformance, chartSavHist, chartWealth, chartExpTrend].forEach(c => { if (c) c.destroy(); });
@@ -3062,9 +3146,11 @@ function initCharts() {
             enabled: hasBreakdownData,
             callbacks: {
               label: ctx => {
-                const pctOfTotal  = Math.round(ctx.raw / total * 100);
-                const pctOfIncome = income > 0 ? (ctx.raw / income * 100).toFixed(1) : '—';
-                return ` ${ctx.label}: ${fmt(ctx.raw)}  (${pctOfTotal}% of allocation · ${pctOfIncome}% of income)`;
+                const pctOfTotal = (ctx.raw / total * 100).toFixed(1);
+                const incomeContext = income > 0
+                  ? ` · ${(ctx.raw / income * 100).toFixed(1)}% of income`
+                  : ' · income not recorded';
+                return ` ${ctx.label}: ${fmt(ctx.raw)}  (${pctOfTotal}% of allocation${incomeContext})`;
               },
             },
           },
@@ -3073,14 +3159,14 @@ function initCharts() {
       },
     });
 
-    // Custom legend with % of income
+    // The legend always shows allocation share, even when period income is zero.
     const legendEl = document.getElementById('expenseLegend');
     if (legendEl) {
       if (!hasBreakdownData) {
         legendEl.innerHTML = `<div class="chart-empty-message">No income or transactions recorded for ${periodLabel}.</div>`;
       } else legendEl.innerHTML = keys.map((k, i) => {
         const lbl = labelMap[k] || k;
-        const pct = income > 0 ? (catTotals[k] / income * 100).toFixed(1) : '—';
+        const pct = (catTotals[k] / total * 100).toFixed(1);
         return `<div class="legend-item">
           <div class="legend-dot" style="background:${colors[i]}"></div>
           <span>${lbl} <small style="color:#94a3b8">(${pct}%)</small></span>
@@ -3337,24 +3423,51 @@ function initCharts() {
   /* ---- Dashboard expense categories for the selected period ---- */
   const dashboardExpenseCtx = document.getElementById('dashboardExpenseCategoryChart')?.getContext('2d');
   if (dashboardExpenseCtx) {
+    const periodData = dashboardPeriodData();
+    const natureRows = periodData.periodExpenses.filter(row =>
+      expenseChartNature === 'all' || getExpenseNature(row) === expenseChartNature
+    );
     const totals = {};
-    dashboardPeriodData().periodExpenses.forEach(row => {
+    natureRows.forEach(row => {
       totals[row.category] = (totals[row.category] || 0) + Number(row.amount || 0);
     });
     const keys = Object.keys(totals).sort((a, b) => totals[b] - totals[a]);
+    const natureLabel = expenseNatureLabels[expenseChartNature];
+    const chartTotal = natureRows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    const fixedTotal = periodData.periodExpenses
+      .filter(row => getExpenseNature(row) === 'fixed')
+      .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    const variableTotal = periodData.periodExpenses
+      .filter(row => getExpenseNature(row) === 'variable')
+      .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    const title = document.getElementById('dashboardExpenseCategoryTitle');
+    const subtitle = document.getElementById('dashboardExpenseCategorySubtitle');
+    if (title) title.textContent = `${natureLabel} Expense Categories`;
+    if (subtitle) subtitle.textContent = `${periodData.range.label} · ${fmt(chartTotal)}`;
+    const fixedTotalEl = document.getElementById('dashboardFixedExpenses');
+    const variableTotalEl = document.getElementById('dashboardVariableExpenses');
+    if (fixedTotalEl) fixedTotalEl.textContent = fmt(fixedTotal);
+    if (variableTotalEl) variableTotalEl.textContent = fmt(variableTotal);
     chartDashboardExpenseCategories = new Chart(dashboardExpenseCtx, {
       type: 'bar',
       data: {
-        labels: keys.length ? keys.map(key => categoryConfig[key]?.label || key) : ['No expenses'],
+        labels: keys.length
+          ? keys.map(key => categoryConfig[key]?.label || key)
+          : [`No ${natureLabel.toLowerCase()} expenses`],
         datasets: [{
-          label: 'Spent', data: keys.length ? keys.map(key => totals[key]) : [0],
-          backgroundColor: keys.map((_, index) => PALETTE[index % PALETTE.length]),
+          label: `${natureLabel} spending`, data: keys.length ? keys.map(key => totals[key]) : [0],
+          backgroundColor: keys.length
+            ? keys.map((_, index) => PALETTE[index % PALETTE.length])
+            : ['#e2e8f0'],
           borderRadius: 5,
         }],
       },
       options: {
         indexAxis: 'y', responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ` ${fmt(ctx.raw)}` } } },
+        plugins: {
+          legend: { display: false },
+          tooltip: { enabled: keys.length > 0, callbacks: { label: ctx => ` ${fmt(ctx.raw)}` } },
+        },
         scales: {
           x: { beginAtZero: true, grid: { color: '#f1f5f9' }, ticks: { callback: value => '₹' + (value / 1000).toFixed(0) + 'k' } },
           y: { grid: { display: false } },
@@ -3362,6 +3475,11 @@ function initCharts() {
         onClick: (_event, elements) => {
           if (!elements.length || !keys[elements[0].index]) return;
           expFilterCat = keys[elements[0].index];
+          expFilterNature = expenseChartNature;
+          document.querySelectorAll('.cat-tab').forEach(tab => {
+            tab.classList.toggle('active', tab.dataset.category === expFilterCat);
+          });
+          syncExpenseNatureControls();
           navigateTo('expenses');
           renderExpensesTable();
         },
@@ -3426,8 +3544,8 @@ function initCharts() {
   /* ---- 7. Expense Trend (line + bar, last 12 months) ---- */
   const expTrendCtx = document.getElementById('expenseTrendChart')?.getContext('2d');
   if (expTrendCtx) {
-    const etLabels = [], etTotals = [], etCounts = [];
-    const catSeries = {};  // category -> array of amounts
+    const etLabels = [], etTotals = [], etFixed = [], etVariable = [];
+    const etCounts = [], etFixedCounts = [], etVariableCounts = [];
     for (let i = 11; i >= 0; i--) {
       let mI = currentMonthIdx - i, yr = currentYear;
       while (mI < 0)  { mI += 12; yr--; }
@@ -3436,47 +3554,60 @@ function initCharts() {
       etLabels.push(label);
       const mExp = expensesForYM(mI, yr);
       etTotals.push(mExp.reduce((s, e) => s + e.amount, 0));
+      etFixed.push(mExp.filter(e => getExpenseNature(e) === 'fixed').reduce((s, e) => s + e.amount, 0));
+      etVariable.push(mExp.filter(e => getExpenseNature(e) === 'variable').reduce((s, e) => s + e.amount, 0));
       etCounts.push(mExp.length);
-      // per-category breakdown
-      const catMap = {};
-      mExp.forEach(e => { catMap[e.category] = (catMap[e.category] || 0) + e.amount; });
-      for (const cat of Object.keys(categoryConfig)) {
-        if (!catSeries[cat]) catSeries[cat] = [];
-        catSeries[cat].push(catMap[cat] || 0);
-      }
+      etFixedCounts.push(mExp.filter(e => getExpenseNature(e) === 'fixed').length);
+      etVariableCounts.push(mExp.filter(e => getExpenseNature(e) === 'variable').length);
     }
-    // Stacked bar datasets for categories
-    const barDatasets = Object.entries(catSeries)
-      .filter(([, vals]) => vals.some(v => v > 0))
-      .map(([cat, vals], idx) => ({
-        label: categoryConfig[cat]?.label || cat,
-        data: vals,
-        backgroundColor: (PALETTE[Object.keys(categoryConfig).indexOf(cat)] || '#94a3b8') + 'CC',
-        stack: 'cats',
-        type: 'bar',
-        order: 2,
-        barPercentage: 0.7,
-        categoryPercentage: 0.8,
-      }));
-    // Total line overlay
-    const lineDataset = {
-      label: 'Total',
-      data: etTotals,
-      borderColor: '#ef4444',
-      backgroundColor: 'rgba(239,68,68,0.08)',
+    const allBarDatasets = [
+      {
+        label: 'Fixed', data: etFixed, backgroundColor: '#8b5cf6CC', stack: 'nature',
+        type: 'bar', order: 2, barPercentage: 0.7, categoryPercentage: 0.8,
+      },
+      {
+        label: 'Variable', data: etVariable, backgroundColor: '#f59e0bCC', stack: 'nature',
+        type: 'bar', order: 2, barPercentage: 0.7, categoryPercentage: 0.8,
+      },
+    ];
+    const trendLine = (label, data, color, fill) => ({
+      label,
+      data,
+      borderColor: color,
+      backgroundColor: fill,
       borderWidth: 2.5,
       pointRadius: 4,
-      pointBackgroundColor: '#ef4444',
+      pointBackgroundColor: color,
       tension: 0.3,
       fill: true,
       type: 'line',
       order: 1,
       yAxisID: 'y',
-    };
+      stack: 'total',
+    });
+    const natureLabel = expenseNatureLabels[expenseChartNature];
+    const selectedData = expenseChartNature === 'fixed' ? etFixed : etVariable;
+    const selectedCounts = expenseChartNature === 'fixed' ? etFixedCounts
+      : expenseChartNature === 'variable' ? etVariableCounts : etCounts;
+    const selectedColor = expenseChartNature === 'fixed' ? '#8b5cf6' : '#f59e0b';
+    const selectedFill = expenseChartNature === 'fixed'
+      ? 'rgba(139,92,246,0.10)'
+      : 'rgba(245,158,11,0.10)';
+    const trendDatasets = expenseChartNature === 'all'
+      ? [...allBarDatasets, trendLine('Total', etTotals, '#ef4444', 'rgba(239,68,68,0.08)')]
+      : [trendLine(`${natureLabel} spending`, selectedData, selectedColor, selectedFill)];
+    const title = document.getElementById('expenseTrendTitle');
+    const subtitle = document.getElementById('expenseTrendSubtitle');
+    if (title) title.textContent = expenseChartNature === 'all'
+      ? 'All Expense Trend'
+      : `${natureLabel} Expense Trend`;
+    if (subtitle) subtitle.textContent = expenseChartNature === 'all'
+      ? 'Fixed + variable spending — last 12 months'
+      : `${natureLabel} spending — last 12 months`;
     chartExpTrend = new Chart(expTrendCtx, {
       data: {
         labels: etLabels,
-        datasets: [...barDatasets, lineDataset],
+        datasets: trendDatasets,
       },
       options: {
         responsive: true,
@@ -3489,18 +3620,18 @@ function initCharts() {
               label: ctx => `${ctx.dataset.label}: ${fmt(ctx.parsed.y)}`,
               footer: items => {
                 const idx = items[0]?.dataIndex;
-                return idx != null ? `${etCounts[idx]} transactions` : '';
+                return idx != null ? `${selectedCounts[idx]} transactions` : '';
               },
             },
           },
         },
         scales: {
           y: {
-            stacked: true,
+            stacked: expenseChartNature === 'all',
             ticks: { callback: v => v >= 1000 ? (v / 1000).toFixed(0) + 'K' : v },
             title: { display: true, text: 'Amount (\u20b9)' },
           },
-          x: { stacked: true, grid: { display: false } },
+          x: { stacked: expenseChartNature === 'all', grid: { display: false } },
         },
       },
     });
@@ -3517,11 +3648,17 @@ function renderExpenseCategoryBreakdown() {
   if (chartExpCatPie) { chartExpCatPie.destroy(); chartExpCatPie = null; }
 
   /* Always use the month navigator so it stays synced */
-  const monthExp = expensesForYM(currentMonthIdx, currentYear);
-  const income = incomeForYM(currentMonthIdx, currentYear);
+  const monthExp = expensesForYM(currentMonthIdx, currentYear).filter(row =>
+    expenseChartNature === 'all' || getExpenseNature(row) === expenseChartNature
+  );
 
   const periodLabel = `${MONTHS[currentMonthIdx]} ${currentYear}`;
   const total = monthExp.reduce((s, e) => s + e.amount, 0);
+  const natureLabel = expenseNatureLabels[expenseChartNature];
+  const titleEl = document.getElementById('expenseCategorySplitTitle');
+  if (titleEl) titleEl.textContent = expenseChartNature === 'all'
+    ? 'All Spending by Category'
+    : `${natureLabel} Spending by Category`;
   if (labelEl) labelEl.textContent = `${periodLabel} · ${fmt(total)}`;
 
   /* Aggregate by category */
@@ -3536,14 +3673,15 @@ function renderExpenseCategoryBreakdown() {
   });
   const data = sorted.map(([, amt]) => amt);
   const colors = sorted.map(([cat]) => PALETTE[catKeys.indexOf(cat)] || '#94a3b8');
+  const hasData = total > 0;
 
   chartExpCatPie = new Chart(ctx, {
     type: 'doughnut',
     data: {
-      labels,
+      labels: hasData ? labels : [`No ${natureLabel.toLowerCase()} expenses`],
       datasets: [{
-        data,
-        backgroundColor: colors,
+        data: hasData ? data : [1],
+        backgroundColor: hasData ? colors : ['#e2e8f0'],
         borderWidth: 2,
         borderColor: '#fff',
         hoverOffset: 6,
@@ -3559,6 +3697,7 @@ function renderExpenseCategoryBreakdown() {
           labels: { boxWidth: 10, font: { size: 11 }, padding: 8 },
         },
         tooltip: {
+          enabled: hasData,
           callbacks: {
             label: ctx => {
               const val = ctx.parsed;
@@ -4156,19 +4295,20 @@ function emergencyAllocationSummary() {
     return result;
   }, { immediate: 0, redeemable: 0, locked: 0 });
   const target = Math.max(0, Number(emergencyFund.target || 0));
-  const usable = totals.immediate + totals.redeemable;
+  const liquid = totals.immediate + totals.redeemable;
+  const counted = liquid + totals.locked;
   return {
-    rows, ...totals, usable, target,
-    designated: usable + totals.locked,
-    gap: Math.max(0, target - usable),
-    progress: target > 0 ? Math.min(100, usable / target * 100) : 0,
+    rows, ...totals, liquid, counted, target,
+    designated: counted,
+    gap: Math.max(0, target - counted),
+    progress: target > 0 ? Math.min(100, counted / target * 100) : 0,
   };
 }
 
 const emergencyLiquidityLabels = {
   immediate: 'Available Now',
   redeemable: 'Needs Redemption',
-  locked: 'Locked / Excluded',
+  locked: 'Locked / Restricted',
 };
 
 function populateEmergencySourceSelect(editingId = 0) {
@@ -4253,7 +4393,7 @@ function renderEmergencyReserve() {
     const node = document.getElementById(id);
     if (node) node.textContent = value;
   };
-  setText('emergencyReserveUsable', fmt(summary.usable));
+  setText('emergencyReserveUsable', fmt(summary.counted));
   setText('emergencyReserveTarget', fmt(summary.target));
   setText('emergencyReserveGap', summary.gap > 0 ? fmt(summary.gap) : summary.target > 0 ? 'Funded' : fmt(0));
   setText('emergencyReserveImmediate', fmt(summary.immediate));
@@ -4317,7 +4457,7 @@ function planningMetrics() {
       - remainingBudget - upcomingBillTotal
     : 0;
   const latestSnapshot = combinedNetWorthHistory().at(-1);
-  const essentialCategories = new Set(['food', 'grocery', 'travel', 'housing', 'health', 'utilities']);
+  const essentialCategories = new Set(['food', 'grocery', 'vegetables_fruits', 'travel', 'housing', 'parents_fund', 'health', 'utilities']);
   let essentialTotal = 0;
   for (let offset = 0; offset < 3; offset++) {
     const date = new Date(currentYear, currentMonthIdx - offset, 1);
@@ -4328,7 +4468,7 @@ function planningMetrics() {
   const essentialMonthlyAverage = essentialTotal / 3;
   const emergencyReserve = emergencyAllocationSummary();
   const emergencyCoverage = essentialMonthlyAverage > 0
-    ? emergencyReserve.usable / essentialMonthlyAverage
+    ? emergencyReserve.counted / essentialMonthlyAverage
     : null;
   return {
     rows, budgetTotal, spent, upcomingBills, upcomingBillTotal,
@@ -5312,6 +5452,7 @@ document.getElementById('expenseForm')?.addEventListener('submit', async e => {
       exp.date        = form.date.value;
       exp.description = form.description.value.trim();
       exp.category    = form.category.value;
+      exp.expenseNature = form.expenseNature.value;
       exp.payment     = form.payment.value;
       exp.amount      = parseFloat(form.amount.value);
       exp.accountId   = Number(form.accountId.value) || null;
@@ -5323,6 +5464,7 @@ document.getElementById('expenseForm')?.addEventListener('submit', async e => {
       date:        form.date.value,
       description: form.description.value.trim(),
       category:    form.category.value,
+      expenseNature: form.expenseNature.value,
       payment:     form.payment.value,
       amount:      parseFloat(form.amount.value),
       accountId:   Number(form.accountId.value) || null,

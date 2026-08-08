@@ -49,8 +49,10 @@ function createExpenseForm() {
   categoryItem.setChoices([
     categoryItem.createChoice('food'),
     categoryItem.createChoice('grocery'),
+    categoryItem.createChoice('vegetables_fruits'),
     categoryItem.createChoice('travel'),
     categoryItem.createChoice('housing'),
+    categoryItem.createChoice('parents_fund'),
     categoryItem.createChoice('health'),
     categoryItem.createChoice('personal_care'),
     categoryItem.createChoice('subscriptions'),
@@ -58,6 +60,16 @@ function createExpenseForm() {
     categoryItem.createChoice('utilities'),
     categoryItem.createChoice('shopping'),
     categoryItem.createChoice('other'),
+  ]);
+
+  // Expense Nature — fixed commitment or variable spending
+  const natureItem = form.addListItem();
+  natureItem.setTitle('Expense Nature');
+  natureItem.setHelpText('Fixed = recurring commitment; Variable = changes with usage or choice');
+  natureItem.setRequired(true);
+  natureItem.setChoices([
+    natureItem.createChoice('variable'),
+    natureItem.createChoice('fixed'),
   ]);
 
   // Description — short text
@@ -107,7 +119,7 @@ function createExpenseForm() {
     // If auto-rename failed, create FormExpenses manually
     Logger.log('⚠️ Could not find auto-created response sheet.');
     Logger.log('   Manually rename "Form Responses 1" to "FormExpenses"');
-    Logger.log('   Then add "Processed" and "ProcessedAt" as columns G and H');
+    Logger.log('   FinTrack reads response columns by header name; no manual helper columns are required.');
     Logger.log('📋 Form URL: ' + form.getPublishedUrl());
     Logger.log('✏️ Edit URL: ' + form.getEditUrl());
   }

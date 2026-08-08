@@ -218,10 +218,21 @@
       <div class="charts-row">
         <div class="chart-card">
           <div class="chart-header">
-            <h3>Expense Categories</h3>
-            <span class="chart-subtitle">Where your spending went</span>
+            <div>
+              <h3 id="dashboardExpenseCategoryTitle">Variable Expense Categories</h3>
+              <span class="chart-subtitle" id="dashboardExpenseCategorySubtitle">Where controllable spending went</span>
+            </div>
+            <select class="chart-nature-select" data-expense-chart-nature aria-label="Dashboard expense nature">
+              <option value="variable">Variable</option>
+              <option value="fixed">Fixed</option>
+              <option value="all">All</option>
+            </select>
           </div>
           <div class="chart-container tall"><canvas id="dashboardExpenseCategoryChart"></canvas></div>
+          <div class="chart-nature-summary">
+            <div><span>Fixed</span><strong id="dashboardFixedExpenses">&#8377;0</strong></div>
+            <div><span>Variable</span><strong id="dashboardVariableExpenses">&#8377;0</strong></div>
+          </div>
         </div>
         <div class="chart-card">
           <div class="chart-header">
@@ -260,8 +271,15 @@
       <div class="expense-overview-grid">
         <div class="chart-card">
           <div class="chart-header">
-            <h3>Expense Trend</h3>
-            <span class="chart-subtitle">Monthly spending — last 12 months</span>
+            <div>
+              <h3 id="expenseTrendTitle">Variable Expense Trend</h3>
+              <span class="chart-subtitle" id="expenseTrendSubtitle">Variable spending — last 12 months</span>
+            </div>
+            <select class="chart-nature-select" data-expense-chart-nature aria-label="Expense trend nature">
+              <option value="variable">Variable</option>
+              <option value="fixed">Fixed</option>
+              <option value="all">All</option>
+            </select>
           </div>
           <div class="chart-body" style="height:260px;">
             <canvas id="expenseTrendChart"></canvas>
@@ -269,8 +287,15 @@
         </div>
         <div class="chart-card">
           <div class="chart-header">
-            <h3>Category Split</h3>
-            <span class="chart-subtitle" id="expCatBreakdownMonth"></span>
+            <div>
+              <h3 id="expenseCategorySplitTitle">Variable Spending by Category</h3>
+              <span class="chart-subtitle" id="expCatBreakdownMonth"></span>
+            </div>
+            <select class="chart-nature-select" data-expense-chart-nature aria-label="Category split expense nature">
+              <option value="variable">Variable</option>
+              <option value="fixed">Fixed</option>
+              <option value="all">All</option>
+            </select>
           </div>
           <div class="chart-body" style="height:260px;">
             <canvas id="expCatPieChart"></canvas>
@@ -281,23 +306,31 @@
       <!-- Summary Strip -->
       <div class="expense-summary-strip">
         <div class="strip-item">
-          <span>Total This Month</span>
+          <span>Total Expenses</span>
           <strong id="stripTotal">₹3,240</strong>
+        </div>
+        <div class="strip-item strip-fixed">
+          <span>Fixed Expenses</span>
+          <strong id="stripFixed">₹0</strong>
+        </div>
+        <div class="strip-item strip-variable">
+          <span>Variable Expenses</span>
+          <strong id="stripVariable">₹0</strong>
         </div>
         <div class="strip-item">
           <span>Transactions</span>
           <strong id="stripCount">10</strong>
         </div>
         <div class="strip-item">
-          <span>Avg Per Day</span>
+          <span>Variable Avg / Day</span>
           <strong id="stripAvg">₹108</strong>
         </div>
         <div class="strip-item">
-          <span>Largest Expense</span>
+          <span>Largest Variable Expense</span>
           <strong id="stripLargest">₹1,200 (Housing)</strong>
         </div>
         <div class="strip-item">
-          <span>Projected Month-End</span>
+          <span>Variable Projected Month-End</span>
           <strong id="stripForecast">₹0</strong>
         </div>
       </div>
@@ -329,6 +362,14 @@
           </select>
         </div>
         <div class="filter-group">
+          <label>Nature</label>
+          <select id="filterExpenseNature">
+            <option value="all">All Expenses</option>
+            <option value="fixed">Fixed Only</option>
+            <option value="variable">Variable Only</option>
+          </select>
+        </div>
+        <div class="filter-group">
           <label>View</label>
           <select id="filterGroupBy">
             <option value="month">Group by Month</option>
@@ -342,8 +383,10 @@
           <button class="cat-tab active" data-category="all">All</button>
           <button class="cat-tab" data-category="food">🍔 Food &amp; Takeaway</button>
           <button class="cat-tab" data-category="grocery">🛒 Grocery</button>
+          <button class="cat-tab" data-category="vegetables_fruits">🥦 Vegetables &amp; Fruits</button>
           <button class="cat-tab" data-category="travel">✈️ Travel</button>
           <button class="cat-tab" data-category="housing">🏠 Housing</button>
+          <button class="cat-tab" data-category="parents_fund">👪 Parents Fund</button>
           <button class="cat-tab" data-category="health">⚕️ Health</button>
           <button class="cat-tab" data-category="personal_care">💇 Personal Care</button>
           <button class="cat-tab" data-category="subscriptions">💻 Subscriptions &amp; Software</button>
@@ -362,6 +405,7 @@
               <th>Date</th>
               <th>Description</th>
               <th>Category</th>
+              <th>Nature</th>
               <th>Payment</th>
               <th>Amount</th>
               <th>Actions</th>
@@ -641,12 +685,12 @@
           <button class="btn-primary btn-sm" id="addEmergencyAllocationBtn" type="button">+ Allocate Asset</button>
         </div>
         <div class="emergency-reserve-summary">
-          <div class="reserve-stat reserve-stat-primary"><span>Usable Reserve</span><strong id="emergencyReserveUsable">&#8377;0</strong></div>
+          <div class="reserve-stat reserve-stat-primary"><span>Total Emergency Reserve</span><strong id="emergencyReserveUsable">&#8377;0</strong></div>
           <div class="reserve-stat"><span>Target</span><strong id="emergencyReserveTarget">&#8377;0</strong></div>
           <div class="reserve-stat"><span>Target Gap</span><strong id="emergencyReserveGap">&#8377;0</strong></div>
           <div class="reserve-stat"><span>Available Now</span><strong id="emergencyReserveImmediate">&#8377;0</strong></div>
           <div class="reserve-stat"><span>Needs Redemption</span><strong id="emergencyReserveRedeemable">&#8377;0</strong></div>
-          <div class="reserve-stat"><span>Locked / Excluded</span><strong id="emergencyReserveLocked">&#8377;0</strong></div>
+          <div class="reserve-stat"><span>Locked / Restricted</span><strong id="emergencyReserveLocked">&#8377;0</strong></div>
         </div>
         <div class="reserve-progress-row">
           <div class="progress-bar"><div class="progress-fill" id="emergencyReserveProgress"></div></div>
@@ -657,7 +701,7 @@
           <input id="emergencyTargetInput" type="number" min="0" step="100" placeholder="Target amount" required />
           <button class="btn-secondary compact-btn" type="submit">Save Target</button>
         </form>
-        <p class="planning-help">Usable reserve includes assets marked Available Now or Needs Redemption. Locked assets are shown for transparency but do not fund the target.</p>
+        <p class="planning-help">All designated assets, including locked assets, count toward the target and coverage. Availability shows how quickly each asset can be accessed.</p>
         <div id="emergencyAllocationList" class="emergency-allocation-list"></div>
       </div>
 
@@ -791,7 +835,9 @@
             <select id="budgetCategory" required>
               <option value="">Category</option>
               <option value="food">Food</option><option value="grocery">Grocery</option>
+              <option value="vegetables_fruits">Vegetables &amp; Fruits</option>
               <option value="travel">Travel</option><option value="housing">Housing</option>
+              <option value="parents_fund">Parents Fund</option>
               <option value="health">Health</option><option value="entertainment">Entertainment</option>
               <option value="personal_care">Personal Care</option><option value="subscriptions">Subscriptions &amp; Software</option><option value="utilities">Utilities</option><option value="shopping">Shopping</option>
               <option value="other">Other</option>
@@ -808,7 +854,7 @@
             <input id="billName" type="text" maxlength="80" placeholder="Bill name" required />
             <input id="billAmount" type="number" min="0.01" step="0.01" placeholder="Amount" required />
             <input id="billDueDay" type="number" min="1" max="31" placeholder="Due day" required />
-            <select id="billCategory"><option value="utilities">Utilities</option><option value="housing">Housing</option><option value="health">Health</option><option value="personal_care">Personal Care</option><option value="subscriptions">Subscriptions &amp; Software</option><option value="entertainment">Entertainment</option><option value="other">Other</option></select>
+            <select id="billCategory"><option value="utilities">Utilities</option><option value="housing">Housing</option><option value="parents_fund">Parents Fund</option><option value="health">Health</option><option value="personal_care">Personal Care</option><option value="subscriptions">Subscriptions &amp; Software</option><option value="entertainment">Entertainment</option><option value="other">Other</option></select>
             <label class="checkbox-label"><input id="billIncludedInBudget" type="checkbox" checked /> Included in category budget</label>
             <button class="btn-primary" type="submit">Add Bill</button>
           </form>
@@ -966,8 +1012,10 @@
                 <option value="">Select category</option>
                 <option value="food">🍔 Food &amp; Takeaway</option>
                 <option value="grocery">🛒 Grocery</option>
+                <option value="vegetables_fruits">🥦 Vegetables &amp; Fruits</option>
                 <option value="travel">✈️ Travel</option>
                 <option value="housing">🏠 Housing</option>
+                <option value="parents_fund">👪 Parents Fund</option>
                 <option value="health">⚕️ Health</option>
                 <option value="personal_care">💇 Personal Care</option>
                 <option value="subscriptions">💻 Subscriptions &amp; Software</option>
@@ -978,6 +1026,16 @@
               </select>
             </div>
             <div class="form-group">
+              <label>Expense Nature</label>
+              <select id="expNature" name="expenseNature" required>
+                <option value="variable">Variable</option>
+                <option value="fixed">Fixed</option>
+              </select>
+              <small class="field-help">Fixed is a recurring commitment; variable changes with usage or choice.</small>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
               <label>Payment Method</label>
               <select id="expPayment" name="payment">
                 <option value="upi">UPI</option>
@@ -987,10 +1045,10 @@
                 <option value="transfer">Bank Transfer</option>
               </select>
             </div>
-          </div>
-          <div class="form-group">
-            <label>Paid From Account</label>
-            <select id="expAccount" name="accountId" required><option value="">Select paying account</option></select>
+            <div class="form-group">
+              <label>Paid From Account</label>
+              <select id="expAccount" name="accountId" required><option value="">Select paying account</option></select>
+            </div>
           </div>
           <div class="form-actions">
             <button type="button" class="btn-secondary" data-modal="expenseModal">Cancel</button>
@@ -1296,7 +1354,7 @@
             <select id="emergencyAllocationLiquidity" required>
               <option value="immediate">Available Now</option>
               <option value="redeemable">Needs Withdrawal / Redemption</option>
-              <option value="locked">Locked / Not Usable Now</option>
+              <option value="locked">Locked / Restricted Access</option>
             </select>
           </div>
           <div class="reserve-source-preview" id="emergencyAllocationPreview">Select an asset to see its current value.</div>

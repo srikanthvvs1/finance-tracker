@@ -305,11 +305,16 @@ Total allocated
 
 Unallocated = max(0, income - total allocated)
 
-Slice % of income = slice amount ÷ income × 100
+Slice % of allocation = slice amount ÷ total allocated slices × 100
+
+Slice % of income = slice amount ÷ income × 100, when income > 0
 ```
 
 If outflows exceed income, Unallocated is zero and the other slices can total
-more than 100% of income.
+more than 100% of income. The visible legend always uses percentage of
+allocation and therefore remains defined and totals approximately 100% even
+when period income is zero. The tooltip includes percentage of income only when
+income has been recorded.
 
 Why it is necessary: it shows where the selected month’s income was directed,
 not merely where expenses were spent.
@@ -340,13 +345,19 @@ the trend look better than it is.
 
 ### 3.11 Expense Categories
 
-This horizontal bar chart ranks expense categories in the Dashboard period:
+This horizontal bar chart defaults to **Variable** and ranks expense categories
+in the Dashboard period. Its selector supports Variable, Fixed, and All:
 
 ```text
-Category spend = Σ expenses in category and date range
+Category spend
+= Σ expenses matching category, selected nature, and Dashboard date range
 ```
 
-Clicking a bar opens the Expenses section with that category selected.
+Clicking a bar opens the Expenses section with both that category and nature
+selected. The choice is remembered locally in the browser. This default keeps a
+large rent payment from obscuring controllable categories without removing rent
+from total expenses. Fixed and Variable period totals remain visible below the
+chart regardless of its selected view.
 
 ### 3.12 Net-Worth History
 
@@ -411,9 +422,16 @@ unrealised movement without opening the full Investments section.
 | Date | Actual payment date; determines month and ledger order | Places spending in the correct reporting period |
 | Amount | Positive amount spent | Drives expense totals and debits the selected account |
 | Description | Merchant or purpose | Makes the transaction identifiable |
-| Category | Food & Takeaway, Grocery, Travel, Housing, Health, Personal Care, Subscriptions & Software, Entertainment, Utilities, Shopping, or Other | Drives category charts and analysis |
+| Category | Food & Takeaway, Grocery, Vegetables & Fruits, Travel, Housing, Parents Fund, Health, Personal Care, Subscriptions & Software, Entertainment, Utilities, Shopping, or Other | Drives category charts and analysis |
+| Expense Nature | Fixed or Variable | Separates recurring commitments from spending that changes with usage or choice |
 | Payment Method | UPI, credit card, debit card, cash, or bank transfer | Describes the payment rail; it does not choose the account |
 | Paid From Account | Account whose balance is affected | Connects spending to the account ledger |
+
+During the category upgrade, an existing Grocery row moves to Vegetables &
+Fruits only when its description starts with an unmistakable produce label such
+as Vegetable, Veggies, Fruit, or Produce. The category reclassification does
+not alter the date, amount, expense nature, paying account, or ledger effect.
+Ambiguous Grocery rows remain Grocery.
 
 The account selection—not the Payment Method—controls the balance. For example,
 selecting Payment Method = UPI and Paid From Account = Axis debits Axis.
@@ -435,38 +453,51 @@ Amount owed effect = +expense amount
 For each of the 12 months ending at the globally selected month:
 
 ```text
-Category monthly amount = Σ expense amount in that category and month
+Fixed monthly amount = Σ fixed expense amounts in that month
+Variable monthly amount = Σ variable expense amounts in that month
 Monthly total = Σ all expense amounts in that month
 Transaction count = number of expense rows in that month
 ```
 
-Stacked bars show categories, and the line shows the total.
+The selector is synchronized with the expense-category pie chart and Dashboard
+expense-category chart:
 
-Why it is necessary: it separates a general increase in spending from an
-increase caused by one category.
+- **Variable** shows only the Variable monthly line and Variable transaction
+  count.
+- **Fixed** shows only the Fixed monthly line and Fixed transaction count.
+- **All** shows stacked Fixed and Variable bars, the combined total line, and
+  the total transaction count.
+
+Why it is necessary: it shows whether a spending increase came from recurring
+commitments or controllable variable activity.
 
 ### 4.3 Category Split
 
-Uses expenses in the globally selected month:
+Uses expenses in the globally selected month and defaults to Variable. The
+selector can show Fixed or All:
 
 ```text
-Category amount = Σ selected-month expenses in category
-Category share % = category amount ÷ all selected-month expenses × 100
+Category amount = Σ selected-month expenses matching selected nature and category
+Category share % = category amount ÷ all selected-month expenses matching selected nature × 100
 ```
 
 Why it is necessary: it identifies the categories responsible for the month’s
-spending.
+spending without allowing rent to dominate the default controllable-spending
+view. Fixed and All remain one click away.
 
 ### 4.4 Summary strip
 
-**Total This Month**
+**Total Expenses**
 
 ```text
-Total = Σ expense amounts matching the Expenses table filters
+Total Expenses = Fixed Expenses + Variable Expenses
+Fixed Expenses = Σ fixed amounts matching Year, Month, and Category
+Variable Expenses = Σ variable amounts matching Year, Month, and Category
 ```
 
-Despite the label, selecting All Years or All Months makes this a total of the
-filtered period.
+The Nature table filter does not hide either summary amount; this keeps the two
+types directly comparable. Selecting All Years or All Months broadens the
+summary period.
 
 **Transactions**
 
@@ -474,51 +505,57 @@ filtered period.
 Transactions = number of filtered expense records
 ```
 
-**Avg Per Day**
+**Variable Avg / Day**
 
 For a selected current month:
 
 ```text
-Average per day = filtered total ÷ today’s day number
+Variable average per day = filtered Variable expenses ÷ today’s day number
 ```
 
 For a selected past month:
 
 ```text
-Average per day = filtered total ÷ days in that month
+Variable average per day = filtered Variable expenses ÷ days in that month
 ```
 
 For a broad date range:
 
 ```text
-Average per day
-= filtered total ÷ inclusive days between earliest and latest filtered entry
+Variable average per day
+= filtered Variable expenses
+  ÷ inclusive days between earliest and latest filtered Variable entry
 ```
 
-**Largest Expense**
+**Largest Variable Expense**
 
-The highest single filtered expense and its category.
+The highest single filtered Variable expense and its category. Fixed expenses
+such as rent or regular parental support are excluded.
 
-**Projected Month-End**
+**Variable Projected Month-End**
 
 For the current month:
 
 ```text
-Projected Month-End
-= spending so far ÷ elapsed day number × days in month
+Variable Projected Month-End
+= Variable spending so far ÷ elapsed day number × days in month
 ```
 
-For a non-current period, it displays the filtered total rather than a
-projection.
+The projection is shown only when one specific current month is selected. For a
+past month or broad period, it displays a dash because a run-rate projection
+would be misleading.
 
 Why these labels are necessary: total shows scale, count shows frequency,
-average shows pace, largest shows concentration, and projection warns about the
-likely month-end result.
+variable average shows controllable pace, largest shows the biggest variable
+purchase, and the variable-only projection warns about the likely discretionary
+month-end result without repeatedly extrapolating fixed commitments.
 
 ### 4.5 Filters
 
 - **Year** limits the table and summary strip to a year.
 - **Month** limits them to a calendar month.
+- **Nature** limits the table to Fixed, Variable, or All. The summary strip still
+  displays both nature totals for comparison.
 - **View: Group by Month** groups an all-period view and adds month subtotals.
 - **View: Flat List** shows one continuous list.
 - **Category tabs** limit the table and summary strip to one category.
@@ -1067,12 +1104,12 @@ transaction, or change net worth.
 
 | Label | Calculation and purpose |
 |---|---|
-| Usable Reserve | **Available Now + Needs Redemption**; this is the amount used for progress and coverage |
-| Target | Desired usable reserve entered by the user |
-| Target Gap | `max(0, Target - Usable Reserve)` |
+| Total Emergency Reserve | **Available Now + Needs Redemption + Locked / Restricted**; this is the amount used for progress and coverage |
+| Target | Desired total emergency reserve entered by the user |
+| Target Gap | `max(0, Target - Total Emergency Reserve)` |
 | Available Now | Effective allocations that can be spent immediately, normally bank, cash, or wallet balances |
 | Needs Redemption | Effective allocations that require a withdrawal or sale, such as an FD or mutual fund |
-| Locked / Excluded | Designated value shown for context but excluded from the target, such as restricted PPF/NPS value |
+| Locked / Restricted | Designated value that is difficult or restricted to access, such as PPF/NPS; it remains included in the target and coverage |
 | Allocate Asset | Links an existing account or holding to the emergency purpose without changing that asset |
 
 For every allocation:
@@ -1093,15 +1130,17 @@ the asset currently contains. Each account or holding can be allocated only
 once, preventing duplicate designation of the same value.
 
 ```text
-Usable Reserve = Σ Available Now + Σ Needs Redemption
-Target Gap = max(0, Target - Usable Reserve)
-Progress % = min(100, Usable Reserve ÷ Target × 100)
-Coverage Months = Usable Reserve ÷ average essential monthly expenses
+Total Emergency Reserve
+= Σ Available Now + Σ Needs Redemption + Σ Locked / Restricted
+Target Gap = max(0, Target - Total Emergency Reserve)
+Progress % = min(100, Total Emergency Reserve ÷ Target × 100)
+Coverage Months = Total Emergency Reserve ÷ average essential monthly expenses
 ```
 
-Essential monthly expenses are the average of Food, Grocery, Travel, Housing,
-Health, and Utilities over the latest three months relative to the selected
-month. If that average is zero, coverage displays **Not set**.
+Essential monthly expenses are the average of Food, Grocery, Vegetables &
+Fruits, Travel, Housing, Parents Fund, Health, and Utilities over the latest
+three months relative to the selected month. If that average is zero, coverage
+displays **Not set**.
 
 Legacy `EFContributions` rows remain in historical monthly allocation and
 savings calculations for compatibility. Their accumulated balance is not added
@@ -1400,7 +1439,7 @@ actual transaction date as the 7th and enter the NAV/units allotted for the
 | IncomeTransactions | Dated income source, description, amount, and receiving account |
 | Transfers | Two-sided internal account movements |
 | ReconciliationAdjustments | Dated signed corrections with reasons and creation time |
-| Expenses | Expense records and paying account |
+| Expenses | Expense records, category, fixed/variable nature, and paying account |
 | Investments | Holding identity, category, current price, and investment account |
 | Transactions | BUY, SELL, DEPOSIT, INTEREST, WITHDRAWAL, and investment ADJUSTMENT history, including source, settlement date, and charges |
 | SavingsHistory | Derived monthly income, expense, investment, emergency, and surplus summary |
