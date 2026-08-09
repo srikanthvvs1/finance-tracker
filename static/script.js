@@ -284,6 +284,16 @@ const todayISO = () => {
   return `${now.getFullYear()}-${month}-${day}`;
 };
 
+function defaultBlankDateInputs(root = document) {
+  const inputs = [];
+  if (root?.matches?.('input[type="date"]')) inputs.push(root);
+  root?.querySelectorAll?.('input[type="date"]').forEach(input => inputs.push(input));
+  const today = todayISO();
+  inputs.forEach(input => {
+    if (!input.value) input.value = today;
+  });
+}
+
 function setAccountSaveStatus(message, state = '') {
   const node = document.getElementById('accountSaveStatus');
   if (!node) return;
@@ -638,7 +648,9 @@ document.getElementById('addEntryBtn')?.addEventListener('click', () => {
    MODAL HELPERS
    ============================================================ */
 function openModal(id) {
-  document.getElementById(id)?.classList.add('open');
+  const modal = document.getElementById(id);
+  defaultBlankDateInputs(modal);
+  modal?.classList.add('open');
   if (id === 'expenseModal' && !_editingExpenseId) {
     const select = document.getElementById('expAccount');
     if (select && !select.value) select.value = String(defaultAccountId('spending') || '');
@@ -689,6 +701,17 @@ function closeModal(id) {
 
 document.querySelectorAll('.modal-close, .btn-secondary[data-modal]').forEach(btn => {
   btn.addEventListener('click', () => closeModal(btn.dataset.modal));
+});
+
+document.addEventListener('reset', event => {
+  // Native reset values are applied after the reset event has fired.
+  setTimeout(() => defaultBlankDateInputs(event.target), 0);
+});
+
+document.addEventListener('focusin', event => {
+  if (event.target?.matches?.('input[type="date"]') && !event.target.value) {
+    event.target.value = todayISO();
+  }
 });
 
 /* ============================================================
@@ -3490,43 +3513,81 @@ function initCharts() {
   /* ---- Net-worth history from actual saved snapshots ---- */
   const wealthCtx = document.getElementById('wealthChart')?.getContext('2d');
   if (wealthCtx) {
-    const snapshots = combinedNetWorthHistory().slice(-12);
-    const isBaseline = snapshots.length === 1;
+    const snapshots = combinedNetWorthHistory();
+    const snapshotsByMonth = new Map(snapshots.map(row => [String(row.month), row]));
+    const wealthTimeline = [];
+    for (let offset = 11; offset >= 0; offset--) {
+      let monthIndex = currentMonthIdx - offset;
+      let year = currentYear;
+      while (monthIndex < 0) { monthIndex += 12; year--; }
+      while (monthIndex > 11) { monthIndex -= 12; year++; }
+      const month = `${MONTHS[monthIndex].slice(0, 3)} ${year}`;
+      wealthTimeline.push({ month, snapshot: snapshotsByMonth.get(month) || null });
+    }
+    const firstRecordedIndex = wealthTimeline.findIndex(item => item.snapshot);
+    const recordedCount = wealthTimeline.filter(item => item.snapshot).length;
+    const isBaseline = recordedCount === 1;
+    const timelineValue = getter => wealthTimeline.map((item, index) => {
+      if (item.snapshot) return getter(item.snapshot);
+      return firstRecordedIndex >= 0 && index < firstRecordedIndex ? 0 : null;
+    });
     const wealthSubtitle = document.getElementById('wealthChartSubtitle');
     if (wealthSubtitle) {
-      wealthSubtitle.textContent = isBaseline
-        ? 'Baseline captured · growth appears after the next monthly snapshot'
-        : 'Automatically captured monthly · manual snapshots override';
+      const firstMonth = firstRecordedIndex >= 0 ? wealthTimeline[firstRecordedIndex].month : '';
+      wealthSubtitle.textContent = firstMonth
+        ? `12-month view · zero baseline before tracking began in ${firstMonth}`
+        : '12-month view · no net-worth snapshot recorded yet';
     }
-    const wLabels = snapshots.map(row => String(row.month).replace(' 20', " '"));
-    const wNetWorthData = snapshots.map(netWorthValue);
-    const wAssets = snapshots.map(row => ['cash', 'bank', 'investments', 'retirement', 'otherAssets']
+    const wLabels = wealthTimeline.map(item => String(item.month).replace(' 20', " '"));
+    const wNetWorthData = timelineValue(netWorthValue);
+    const wAssets = timelineValue(row => ['cash', 'bank', 'investments', 'retirement', 'otherAssets']
       .reduce((sum, key) => sum + Number(row[key] || 0), 0));
-    const wLiabilities = snapshots.map(row => ['loans', 'creditCards', 'otherLiabilities']
+    const wLiabilities = timelineValue(row => ['loans', 'creditCards', 'otherLiabilities']
       .reduce((sum, key) => sum + Number(row[key] || 0), 0));
 
     chartWealth = new Chart(wealthCtx, {
-      type: isBaseline ? 'bar' : 'line',
+      type: 'line',
       data: {
         labels: wLabels,
         datasets: [
-          { label: 'Assets', data: wAssets, borderColor: '#10b981', backgroundColor: isBaseline ? 'rgba(16,185,129,0.65)' : 'transparent', tension: 0.35, pointRadius: 2, borderWidth: 2 },
-          { label: 'Liabilities', data: wLiabilities, borderColor: '#ef4444', backgroundColor: isBaseline ? 'rgba(239,68,68,0.65)' : 'transparent', tension: 0.35, pointRadius: 2, borderWidth: 2 },
-          { label: 'Net Worth', data: wNetWorthData, borderColor: '#6366f1', backgroundColor: isBaseline ? 'rgba(99,102,241,0.65)' : 'rgba(99,102,241,0.12)', fill: !isBaseline, tension: 0.35, pointRadius: 4, borderWidth: 2 },
+          {
+            label: 'Assets', data: wAssets,
+            borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.08)',
+            fill: true, tension: 0.4, pointBackgroundColor: '#10b981',
+            pointRadius: isBaseline ? 5 : 3, borderWidth: 2,
+          },
+          {
+            label: 'Liabilities', data: wLiabilities,
+            borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.08)',
+            fill: true, tension: 0.4, pointBackgroundColor: '#ef4444',
+            pointRadius: isBaseline ? 5 : 3, borderWidth: 2,
+          },
+          {
+            label: 'Net Worth', data: wNetWorthData,
+            borderColor: '#6366f1', backgroundColor: 'rgba(99,102,241,0.10)',
+            fill: true, tension: 0.4, pointBackgroundColor: '#6366f1',
+            pointRadius: isBaseline ? 6 : 3, borderWidth: 2,
+          },
         ],
       },
       options: {
         responsive: true, maintainAspectRatio: false,
         interaction: { mode: 'index', intersect: false },
         plugins: {
-          legend: { position: 'top', labels: { usePointStyle: true, boxWidth: 12 } },
+          legend: { position: 'top', labels: { font: { size: 11 }, boxWidth: 14, usePointStyle: true } },
           tooltip: {
-            callbacks: { label: ctx => ` ${ctx.dataset.label}: ${fmt(ctx.raw)}` },
+            callbacks: {
+              label: ctx => {
+                const beforeTracking = firstRecordedIndex >= 0 && ctx.dataIndex < firstRecordedIndex;
+                return beforeTracking
+                  ? ` ${ctx.dataset.label}: ${fmt(0)} (before tracking began)`
+                  : ` ${ctx.dataset.label}: ${fmt(ctx.raw)}`;
+              },
+            },
           },
         },
         scales: {
           y: {
-            beginAtZero: true,
             grid: { color: '#f1f5f9' },
             ticks: { callback: v => '₹' + (v / 1000).toFixed(0) + 'k' },
             title: { display: true, text: 'Net Worth (₹)', font: { size: 11 } },
@@ -5899,11 +5960,10 @@ async function uploadFiles(fileList) {
 document.addEventListener('DOMContentLoaded', async () => {
   // Set today's date as default in date inputs
   const today = todayISO();
-  document.querySelectorAll('input[type="date"]').forEach(el => { el.value = today; });
-  const fyStartYear = new Date().getMonth() >= 3 ? new Date().getFullYear() : new Date().getFullYear() - 1;
+  defaultBlankDateInputs();
   const dashboardFrom = document.getElementById('dashboardDateFrom');
   const dashboardTo = document.getElementById('dashboardDateTo');
-  if (dashboardFrom) dashboardFrom.value = `${fyStartYear}-04-01`;
+  if (dashboardFrom) dashboardFrom.value = today;
   if (dashboardTo) dashboardTo.value = today;
 
   // Load data from the local server

@@ -298,6 +298,11 @@ A negative savings rate means total outflows were greater than recorded income.
 Shows assets minus liabilities from automatically captured monthly snapshots.
 A manual snapshot overrides the automatic value for the same month. The chart
 does not manufacture historical investment prices or estimate goal balances.
+It always uses the same line-and-area treatment as Holdings Value. A single
+baseline is placed on a rolling 12-month axis, with earlier months shown as a
+clearly labelled zero baseline so the first captured month visibly rises into
+the graph. Missing months after tracking begins remain gaps rather than false
+zero values. Future monthly snapshots connect into trend lines.
 
 ### Expense Categories, Recent Activity, and Investment Snapshot
 
@@ -324,6 +329,10 @@ The Expenses section records and explains spending.
   usage or choice. This is independent of Category.
 - **Payment Method** — how the expense was paid.
 - **Amount** — money spent.
+
+All blank date fields across FinTrack default to the current local date. This
+default is restored after a form resets or a modal is reopened. Editing an
+existing record preserves its saved date unless the user changes it.
 
 ### Expense categories
 

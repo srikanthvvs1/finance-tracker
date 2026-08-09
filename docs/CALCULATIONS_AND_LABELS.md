@@ -384,6 +384,14 @@ updated when FinTrack loads and when recorded balances change. When the month
 changes, the previous monthly row remains as history and a new current-month
 row begins.
 
+The chart always renders Assets, Liabilities, and Net Worth as filled line
+series using the same visual treatment as Holdings Value and a rolling 12-month
+axis. Months before the first recorded snapshot display as zero, making the
+first captured month visibly rise from the baseline. Those tooltip values are
+explicitly labelled **before tracking began** and are not historical net-worth
+measurements. A missing month after tracking starts remains a gap rather than a
+false zero. Later snapshots connect into historical lines.
+
 Why it is necessary: saving the observed value each month creates a genuine
 growth series. Today’s account balances cannot reconstruct what every asset
 was worth in an earlier month.
@@ -426,6 +434,10 @@ unrealised movement without opening the full Investments section.
 | Expense Nature | Fixed or Variable | Separates recurring commitments from spending that changes with usage or choice |
 | Payment Method | UPI, credit card, debit card, cash, or bank transfer | Describes the payment rail; it does not choose the account |
 | Paid From Account | Account whose balance is affected | Connects spending to the account ledger |
+
+Every blank date input in FinTrack defaults to the current local calendar date
+on page load, form reset, modal opening, or focus. Existing saved dates loaded
+for editing take priority and are not replaced by the default.
 
 During the category upgrade, an existing Grocery row moves to Vegetables &
 Fruits only when its description starts with an unmistakable produce label such
