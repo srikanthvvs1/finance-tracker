@@ -3824,6 +3824,13 @@ function eligibleSettlementAccounts() {
   return activeAccounts().filter(account => !isInvestmentAccount(account) && !isLiabilityAccount(account));
 }
 
+function eligibleExpenseAccounts() {
+  return activeAccounts().filter(account =>
+    !isInvestmentAccount(account)
+    && (!isLiabilityAccount(account) || account.type === 'credit_card')
+  );
+}
+
 function linkedSettlementAccount(accountOrId) {
   const account = typeof accountOrId === 'object'
     ? accountOrId
@@ -3922,7 +3929,9 @@ function populateAccountSelectors() {
       ? activeAccounts().filter(isInvestmentAccount)
       : id === 'incomeAccount'
         ? activeAccounts().filter(account => !isInvestmentAccount(account) && !isLiabilityAccount(account))
-        : ['expAccount', 'invAccount', 'tradeAccount', 'accountTransactionAccount'].includes(id)
+        : id === 'expAccount'
+          ? eligibleExpenseAccounts()
+        : ['invAccount', 'tradeAccount', 'accountTransactionAccount'].includes(id)
           ? activeAccounts().filter(account => !isInvestmentAccount(account) && !isLiabilityAccount(account))
           : activeAccounts();
     select.innerHTML = `<option value="">${id === 'invContainerAccount' ? 'Select investment account' : placeholder}</option>` + selectable
