@@ -430,7 +430,7 @@ unrealised movement without opening the full Investments section.
 | Date | Actual payment date; determines month and ledger order | Places spending in the correct reporting period |
 | Amount | Positive amount spent | Drives expense totals and debits the selected account |
 | Description | Merchant or purpose | Makes the transaction identifiable |
-| Category | Food & Takeaway, Grocery, Vegetables & Fruits, Travel, Housing, Parents Fund, Health, Personal Care, Subscriptions & Software, Entertainment, Utilities, Shopping, or Other | Drives category charts and analysis |
+| Category | Food & Takeaway, Grocery, Vegetables & Fruits, Travel, Commute, Housing, Parents Fund, Health, Personal Care, Subscriptions & Software, Entertainment, Utilities, Shopping, or Other | Drives category charts and analysis |
 | Expense Nature | Fixed or Variable | Separates recurring commitments from spending that changes with usage or choice |
 | Payment Method | UPI, credit card, debit card, cash, or bank transfer | Describes the payment rail; it does not choose the account |
 | Paid From Account | Account whose balance is affected | Connects spending to the account ledger |
@@ -1150,7 +1150,7 @@ Coverage Months = Total Emergency Reserve ÷ average essential monthly expenses
 ```
 
 Essential monthly expenses are the average of Food, Grocery, Vegetables &
-Fruits, Travel, Housing, Parents Fund, Health, and Utilities over the latest
+Fruits, Travel, Commute, Housing, Parents Fund, Health, and Utilities over the latest
 three months relative to the selected month. If that average is zero, coverage
 displays **Not set**.
 

@@ -1416,6 +1416,7 @@ html, body {
 .cat-grocery       { background: #dcfce7; color: #166534; }
 .cat-vegetables-fruits { background: #ecfccb; color: #3f6212; }
 .cat-travel        { background: #dbeafe; color: #1e40af; }
+.cat-commute       { background: #e0e7ff; color: #3730a3; }
 .cat-housing       { background: #d1fae5; color: #065f46; }
 .cat-parents-fund  { background: #fce7f3; color: #9d174d; }
 .cat-health        { background: #fce7f3; color: #9d174d; }
@@ -2841,6 +2842,22 @@ html, body {
   margin-top: 8px;
   padding-top: 8px;
   border-top: 1px solid var(--border);
+}
+
+.expense-form-status {
+  display: none;
+  margin: 4px 0 12px;
+  padding: 10px 12px;
+  border: 1px solid #a7f3d0;
+  border-radius: 8px;
+  background: var(--success-light);
+  color: #047857;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.expense-form-status.success {
+  display: block;
 }
 
 /* ============================================================

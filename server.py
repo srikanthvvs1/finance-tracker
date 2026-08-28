@@ -577,7 +577,7 @@ def _write_sheets(sheet_data):
 # ═══════════════════════════════════════════════════════════════
 
 _VALID_CATEGORIES = {
-    "food", "grocery", "vegetables_fruits", "travel", "housing", "parents_fund", "health",
+    "food", "grocery", "vegetables_fruits", "travel", "commute", "housing", "parents_fund", "health",
     "personal_care", "subscriptions", "entertainment", "utilities", "shopping", "other",
 }
 _VALID_PAYMENTS = {"card", "debit", "cash", "transfer", "upi"}
@@ -599,6 +599,7 @@ def _normalise_category(raw):
         "parent_support": "parents_fund", "parental_support": "parents_fund",
         "family_support": "parents_fund", "money_to_parents": "parents_fund",
         "transport": "travel", "transportation": "travel", "cab": "travel",
+        "commuting": "commute", "daily_commute": "commute",
         "rent": "housing", "home": "housing", "medical": "health",
         "medicine": "health", "pharmacy": "health", "bills": "utilities",
         "haircut": "personal_care", "salon": "personal_care",

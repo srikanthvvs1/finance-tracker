@@ -51,6 +51,7 @@ function createExpenseForm() {
     categoryItem.createChoice('grocery'),
     categoryItem.createChoice('vegetables_fruits'),
     categoryItem.createChoice('travel'),
+    categoryItem.createChoice('commute'),
     categoryItem.createChoice('housing'),
     categoryItem.createChoice('parents_fund'),
     categoryItem.createChoice('health'),

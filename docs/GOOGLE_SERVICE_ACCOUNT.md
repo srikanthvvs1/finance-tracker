@@ -33,7 +33,7 @@ other categories default to Variable unless a recurring keyword such as rent,
 EMI, insurance, subscription, broadband, or Wi-Fi is present.
 
 The Apps Script in `config/setup_form.gs` can create the form and worksheet.
-Its category list includes `food`, `grocery`, `vegetables_fruits`, `travel`,
+Its category list includes `food`, `grocery`, `vegetables_fruits`, `travel`, `commute`,
 `housing`, `parents_fund`, `health`, `personal_care`, `subscriptions`,
 `entertainment`, `utilities`, `shopping`, and `other`. New forms created by the
 script also include the Fixed/Variable question.

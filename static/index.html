@@ -385,6 +385,7 @@
           <button class="cat-tab" data-category="grocery">🛒 Grocery</button>
           <button class="cat-tab" data-category="vegetables_fruits">🥦 Vegetables &amp; Fruits</button>
           <button class="cat-tab" data-category="travel">✈️ Travel</button>
+          <button class="cat-tab" data-category="commute">🚌 Commute</button>
           <button class="cat-tab" data-category="housing">🏠 Housing</button>
           <button class="cat-tab" data-category="parents_fund">👪 Parents Fund</button>
           <button class="cat-tab" data-category="health">⚕️ Health</button>
@@ -836,7 +837,7 @@
               <option value="">Category</option>
               <option value="food">Food</option><option value="grocery">Grocery</option>
               <option value="vegetables_fruits">Vegetables &amp; Fruits</option>
-              <option value="travel">Travel</option><option value="housing">Housing</option>
+              <option value="travel">Travel</option><option value="commute">Commute</option><option value="housing">Housing</option>
               <option value="parents_fund">Parents Fund</option>
               <option value="health">Health</option><option value="entertainment">Entertainment</option>
               <option value="personal_care">Personal Care</option><option value="subscriptions">Subscriptions &amp; Software</option><option value="utilities">Utilities</option><option value="shopping">Shopping</option>
@@ -987,7 +988,7 @@
     <div class="modal">
       <div class="modal-header">
         <h2>Add Expense</h2>
-        <button class="modal-close" data-modal="expenseModal">&#x2715;</button>
+        <button class="modal-close" data-modal="expenseModal" aria-label="Close expense form">&#x2715;</button>
       </div>
       <div class="modal-body">
         <form id="expenseForm" autocomplete="off">
@@ -1014,6 +1015,7 @@
                 <option value="grocery">🛒 Grocery</option>
                 <option value="vegetables_fruits">🥦 Vegetables &amp; Fruits</option>
                 <option value="travel">✈️ Travel</option>
+                <option value="commute">🚌 Commute</option>
                 <option value="housing">🏠 Housing</option>
                 <option value="parents_fund">👪 Parents Fund</option>
                 <option value="health">⚕️ Health</option>
@@ -1050,8 +1052,9 @@
               <select id="expAccount" name="accountId" required><option value="">Select paying account</option></select>
             </div>
           </div>
+          <p id="expenseFormStatus" class="expense-form-status" role="status" aria-live="polite"></p>
           <div class="form-actions">
-            <button type="button" class="btn-secondary" data-modal="expenseModal">Cancel</button>
+            <button type="button" class="btn-secondary" data-modal="expenseModal">Close</button>
             <button type="submit" class="btn-primary">Add Expense</button>
           </div>
         </form>

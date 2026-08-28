@@ -334,6 +334,9 @@ All blank date fields across FinTrack default to the current local date. This
 default is restored after a form resets or a modal is reopened. Editing an
 existing record preserves its saved date unless the user changes it.
 
+After a new expense is saved, the expense form stays open, confirms the save,
+and resets for the next entry. Use **Close** or the close icon when finished.
+
 ### Expense categories
 
 | Category | Meaning |
@@ -341,7 +344,8 @@ existing record preserves its saved date unless the user changes it.
 | Food & Takeaway | Restaurants, delivery, snacks, and eating outside |
 | Grocery | Packaged food, staples, cleaning supplies, and other household items purchased for home |
 | Vegetables & Fruits | Fresh vegetables, fruits, and produce purchased for home |
-| Travel | Public transport, fuel, taxis, tickets, and trips |
+| Travel | Tickets, accommodation, and other trip-related costs |
+| Commute | Daily public transport, fuel, taxis, and travel to work or regular destinations |
 | Housing | Rent, maintenance, and home-related costs |
 | Parents Fund | Money provided to parents or support for their household expenses |
 | Health | Medical visits, medicine, fitness, and healthcare |

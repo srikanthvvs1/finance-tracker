@@ -197,6 +197,7 @@ const categoryConfig = {
   grocery:       { label: 'Grocery',       icon: '🛒', cls: 'cat-grocery'       },
   vegetables_fruits: { label: 'Vegetables & Fruits', icon: '🥦', cls: 'cat-vegetables-fruits' },
   travel:        { label: 'Travel',        icon: '✈️',  cls: 'cat-travel'        },
+  commute:       { label: 'Commute',       icon: '🚌', cls: 'cat-commute'       },
   housing:       { label: 'Housing',       icon: '🏠', cls: 'cat-housing'       },
   parents_fund:  { label: 'Parents Fund',  icon: '👪', cls: 'cat-parents-fund'  },
   health:        { label: 'Health',        icon: '⚕️',  cls: 'cat-health'        },
@@ -652,9 +653,17 @@ function openModal(id) {
   defaultBlankDateInputs(modal);
   modal?.classList.add('open');
   if (id === 'expenseModal' && !_editingExpenseId) {
+    setExpenseFormStatus();
     const select = document.getElementById('expAccount');
     if (select && !select.value) select.value = String(defaultAccountId('spending') || '');
   }
+}
+
+function setExpenseFormStatus(message = '') {
+  const status = document.getElementById('expenseFormStatus');
+  if (!status) return;
+  status.textContent = message;
+  status.classList.toggle('success', Boolean(message));
 }
 
 /**
@@ -684,6 +693,7 @@ function closeModal(id) {
   /* Reset expense modal edit state */
   if (id === 'expenseModal') {
     _editingExpenseId = null;
+    setExpenseFormStatus();
     const modal = document.getElementById('expenseModal');
     modal.querySelector('.modal-header h2').textContent = 'Add Expense';
     modal.querySelector('button[type="submit"]').textContent = 'Add Expense';
@@ -963,6 +973,7 @@ function openExpenseModalForEdit(id) {
   form.accountId.value   = exp.accountId || '';
   // Update modal title & button
   const modal = document.getElementById('expenseModal');
+  setExpenseFormStatus();
   modal.querySelector('.modal-header h2').textContent = 'Edit Expense';
   modal.querySelector('button[type="submit"]').textContent = 'Save Changes';
   openModal('expenseModal');
@@ -4527,7 +4538,7 @@ function planningMetrics() {
       - remainingBudget - upcomingBillTotal
     : 0;
   const latestSnapshot = combinedNetWorthHistory().at(-1);
-  const essentialCategories = new Set(['food', 'grocery', 'vegetables_fruits', 'travel', 'housing', 'parents_fund', 'health', 'utilities']);
+  const essentialCategories = new Set(['food', 'grocery', 'vegetables_fruits', 'travel', 'commute', 'housing', 'parents_fund', 'health', 'utilities']);
   let essentialTotal = 0;
   for (let offset = 0; offset < 3; offset++) {
     const date = new Date(currentYear, currentMonthIdx - offset, 1);
@@ -5514,8 +5525,10 @@ document.getElementById('incomeForm')?.addEventListener('submit', async event =>
 document.getElementById('expenseForm')?.addEventListener('submit', async e => {
   e.preventDefault();
   const form = e.target;
+  const isEditing = _editingExpenseId != null;
+  setExpenseFormStatus();
   const previousExpenses = expenses.map(row => ({ ...row }));
-  if (_editingExpenseId != null) {
+  if (isEditing) {
     // Edit mode — update existing expense
     const exp = expenses.find(x => x.id === _editingExpenseId);
     if (exp) {
@@ -5546,7 +5559,16 @@ document.getElementById('expenseForm')?.addEventListener('submit', async e => {
     await saveExpenses();
     expenses = await apiGet('/expenses');
     refreshDashboard();
-    closeModal('expenseModal');
+    if (isEditing) {
+      closeModal('expenseModal');
+    } else {
+      form.reset();
+      defaultBlankDateInputs(form);
+      const accountSelect = form.elements.accountId;
+      if (accountSelect) accountSelect.value = String(defaultAccountId('spending') || '');
+      setExpenseFormStatus('Expense added successfully. You can add another expense or close this window.');
+      form.elements.amount?.focus();
+    }
   } catch (error) {
     expenses = previousExpenses;
     alert(`Expense was not saved.\n\n${error.message}`);
